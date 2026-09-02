@@ -1,0 +1,8 @@
+# Runtime dependencies. tkinter ships with Python; ffmpeg is an external
+# program needed only for MP4 output.
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.7
+
+# Only needed to build the standalone executable (python chirp/build_exe.py):
+# pyinstaller>=6.0

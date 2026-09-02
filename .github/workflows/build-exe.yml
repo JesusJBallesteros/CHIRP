@@ -1,0 +1,66 @@
+name: Build Windows executable
+
+# Tag a version to get a downloadable .exe:
+#     git tag v1.0.0 && git push origin v1.0.0
+# Or trigger it by hand from the Actions tab to just get a build artifact.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed to attach the binary to a Release
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      # Built without ffmpeg on purpose. The common Windows ffmpeg builds are
+      # GPL, and shipping one inside an MIT-licensed release binary would drag
+      # the whole download under the GPL. Users install ffmpeg themselves, or
+      # build locally with `python chirp/build_exe.py` to bundle their own.
+      - name: Build executable
+        run: python chirp/build_exe.py --no-ffmpeg --name CHIRP
+
+      - name: Smoke-test the build
+        shell: bash
+        run: |
+          test -f chirp/dist/CHIRP.exe || { echo "executable not produced"; exit 1; }
+          ls -la chirp/dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CHIRP-windows-x64
+          path: chirp/dist/CHIRP.exe
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: chirp/dist/CHIRP.exe
+          body: |
+            Windows x64 build of CHIRP.
+
+            No installation: download `CHIRP.exe` and double-click it.
+
+            **ffmpeg is not bundled** in this release build (licensing — see the
+            workflow comment). WAV export works out of the box; for MP4 export,
+            install ffmpeg and make sure it is on your `PATH`, put `ffmpeg.exe`
+            next to `CHIRP.exe`, or point the GUI at it on the Output tab.
+
+            To get a build with ffmpeg included, clone the repository and run
+            `python chirp/build_exe.py`.

@@ -1,0 +1,38 @@
+# Recordings and derived media - never commit these, they are enormous
+*.dat
+*.rhd
+*.wav
+*.mp4
+*.mkv
+*.avi
+
+# ...but the demo video the README points at is meant to be tracked
+!demo/*.mp4
+
+# Intan session metadata that may sit alongside recordings
+settings.xml
+info.rhd
+
+# Default output folders created by the tools
+audio/
+video/
+converted/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
