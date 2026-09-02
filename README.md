@@ -8,13 +8,39 @@ accumulating in sync with that audio, coloured by amplitude cluster.
 
 Spikes played through a speaker chirp. Hence the name.
 
-![The GUI](docs/gui.png)
+## Demo
+
+[![CHIRP output preview](docs/demo.gif)](demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4)
+
+**[▶ Watch the clip with sound](demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4)**
+— one channel, 450–8000 Hz, 10 s in real time, two amplitude clusters. The
+preview above is silent and runs at 2×; the clip is the real thing, spikes
+appearing exactly as you hear them.
+
+<!--
+  The GIF above is a fallback, because GitHub does not render a player for a
+  video committed to the repository - a relative link to an .mp4 becomes a
+  download link, not a player.
+
+  To get a real inline player with sound: open this file on github.com, click
+  edit, and drag demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4 into the text
+  area. GitHub uploads it and pastes a URL of the form
+
+      https://github.com/user-attachments/assets/<uuid>
+
+  Put that URL on a line of its own, right here, and it renders as a video
+  player. Then the GIF and its link above can be deleted if you like.
+-->
 
 ![An output frame](docs/example_frame.png)
 
 *Top: the whole excerpt at a fixed µV scale, with detected troughs marked as the
 playhead passes them. Bottom: one narrow pane per amplitude cluster, waveforms
 overlaid and accumulating, aligned on the trough, running mean drawn bold.*
+
+## The GUI
+
+![The GUI](docs/gui.png)
 
 ---
 
