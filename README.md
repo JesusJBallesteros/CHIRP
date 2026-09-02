@@ -10,9 +10,9 @@ Spikes played through a speaker chirp. Hence the name.
 
 ## Demo
 
-[![CHIRP output preview](docs/demo.gif)](demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4)
+[![CHIRP output preview](docs/demo.gif)](demo/SingleCh_10s_BP_450-8000Hz_2cluster.mp4)
 
-**[▶ Watch the clip with sound](demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4)**
+**[▶ Watch the clip with sound](demo/SingleCh_10s_BP_450-8000Hz_2cluster.mp4)**
 — one channel, 450–8000 Hz, 10 s in real time, two amplitude clusters. The
 preview above is silent and runs at 2×; the clip is the real thing, spikes
 appearing exactly as you hear them.
@@ -23,7 +23,7 @@ appearing exactly as you hear them.
   download link, not a player.
 
   To get a real inline player with sound: open this file on github.com, click
-  edit, and drag demo/SingleCh_20s_BP_450-8000Hz_2cluster.mp4 into the text
+  edit, and drag demo/SingleCh_10s_BP_450-8000Hz_2cluster.mp4 into the text
   area. GitHub uploads it and pastes a URL of the form
 
       https://github.com/user-attachments/assets/<uuid>
