@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dat_to_audio as eng_audio
 import dat_to_video as eng_video
 
-APP_TITLE = "Intan .dat converter"
+APP_TITLE = "CHIRP GUI"
 PAD = dict(padx=6, pady=3)
 
 
@@ -103,12 +103,12 @@ class App(ttk.Frame):
         if ff:
             self.log(f"ffmpeg: {ff}")
         else:
-            self.log("ffmpeg NOT found - WAV export works, MP4 export will not. "
-                     "Put ffmpeg.exe next to this program, or set the path below.")
+            self.log("ffmpeg NOT found. WAV export is possible but MP4 export is not. "
+                     "Bring a ffmpeg.exe next to this file, or set the path below.")
 
     # ------------------------------------------------------------ layout --
     def _build_folder_row(self):
-        f = ttk.LabelFrame(self, text="Recording folder", padding=6)
+        f = ttk.LabelFrame(self, text="Data folder", padding=6)
         f.grid(row=0, column=0, sticky="ew", **PAD)
         f.columnconfigure(1, weight=1)
         ttk.Button(f, text="Browse...", command=self.pick_folder) \
@@ -169,11 +169,11 @@ class App(ttk.Frame):
         self.v_hi = tk.StringVar(value=str(int(eng_audio.DEFAULT_BAND[1])))
         self.v_fs = tk.StringVar(value=str(eng_audio.SAMPLE_RATE))
         self._row(t, 0, "Start time (s)", self.v_start,
-                  hint="blank = auto-pick a clean window (video) / centre (audio)")
-        self._row(t, 1, "Duration (s)", self.v_dur)
+                  hint="Leave empty to scan for a clean window")
+        self._row(t, 1, "Window duration (s)", self.v_dur)
         self._row(t, 2, "Band-pass low (Hz)", self.v_lo)
         self._row(t, 3, "Band-pass high (Hz)", self.v_hi,
-                  hint="must be below fs/2")
+                  hint="must be below Acquisition rate/2")
         self._row(t, 4, "Acquisition rate (Hz)", self.v_fs,
                   hint="from settings.xml")
 
@@ -184,7 +184,7 @@ class App(ttk.Frame):
         self.v_bits = tk.StringVar(value="16")
         self.v_headroom = tk.StringVar(value="1.0")
         self._row(t, 0, "Resample to (Hz)", self.v_resample,
-                  hint="blank = keep acquisition rate")
+                  hint="Empty to keep Acquisition rate")
         ttk.Label(t, text="Bit depth").grid(row=1, column=0, sticky="w", **PAD)
         ttk.Combobox(t, textvariable=self.v_bits, values=["16", "32"],
                      width=9, state="readonly") \
@@ -197,20 +197,20 @@ class App(ttk.Frame):
         t = ttk.Frame(nb, padding=8)
         nb.add(t, text="Video / spikes")
         self.v_fps = tk.StringVar(value="60")
-        self.v_negk = tk.StringVar(value="6.0")
-        self.v_posk = tk.StringVar(value="7.0")
+        self.v_negk = tk.StringVar(value="5.0")
+        self.v_posk = tk.StringVar(value="8.5")
         self.v_ylim = tk.StringVar(value="100")
         self.v_w = tk.StringVar(value="1600")
         self.v_h = tk.StringVar(value="900")
         self.v_slow = tk.StringVar(value="1")
-        self.v_crf = tk.StringVar(value="18")
+        self.v_crf = tk.StringVar(value="16")
         self.v_wavefrac = tk.StringVar(value="0.26")
         self._row(t, 0, "Frame rate (fps)", self.v_fps)
         self._row(t, 1, "Detection threshold (sigma)", self.v_negk,
                   hint="negative crossing")
         self._row(t, 2, "Rejection threshold (sigma)", self.v_posk,
-                  hint="positive crossing = artifact")
-        self._row(t, 3, "Overview scale (+/- uV)", self.v_ylim)
+                  hint="positive crossing")
+        self._row(t, 3, "Voltage scale (+/- uV)", self.v_ylim)
         ttk.Label(t, text="Frame size").grid(row=4, column=0, sticky="w", **PAD)
         fr = ttk.Frame(t)
         fr.grid(row=4, column=1, columnspan=2, sticky="w")
@@ -279,7 +279,7 @@ class App(ttk.Frame):
 
     # ------------------------------------------------------------ actions --
     def pick_folder(self):
-        d = filedialog.askdirectory(title="Select the recording folder")
+        d = filedialog.askdirectory(title="Select the raw data folder")
         if not d:
             return
         self.folder = Path(d)
@@ -373,7 +373,7 @@ class App(ttk.Frame):
             raise ValueError(f"Band-pass must satisfy 0 < low < high < "
                              f"{cfg['fs'] / 2:.0f} Hz (Nyquist)")
         if cfg["mp4"] and not cfg["ffmpeg"]:
-            raise ValueError("MP4 export needs ffmpeg - set its path on the "
+            raise ValueError("MP4 export needs ffmpeg. Set its path on the "
                              "Output tab, or untick 'Export video'")
         return cfg
 
@@ -451,7 +451,7 @@ class App(ttk.Frame):
                             ("prog", (d + f) / max(1, n_jobs))))
                     done += 1
                     self.q.put(("prog", done / max(1, n_jobs)))
-            self.q.put(("done", f"Finished - {done} file(s) written to "
+            self.q.put(("done", f"Finished. {done} file(s) written to "
                                 f"{cfg['out']}"))
         except eng_video.Cancelled:
             self.q.put(("done", "Cancelled."))

@@ -276,8 +276,8 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
     ax_all.set_ylim(*ylim)
     ax_all.axhline(-neg_k * sigma, color=THRESH, linewidth=0.7, alpha=0.55,
                    linestyle=(0, (5, 4)))
-    ax_all.set_xlabel(f"whole excerpt - {duration:g} s "
-                      f"(fixed ±{ylim[1]:.0f} µV; larger events clipped)",
+    ax_all.set_xlabel(f"Time window: {duration:g} s "
+                      f"(fixed ±{ylim[1]:.0f} µV)",
                       color=FG, fontsize=9)
     ax_all.set_ylabel("µV", color=FG, fontsize=9)
     marks = [ax_all.scatter([], [], s=22, marker="v",
@@ -301,8 +301,8 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
     t_ms = (np.arange(waves.shape[1]) - int(round(pre_ms * fs / 1000))) \
         / fs * 1000.0
     axes_w, traces, means, titles = [], [], [], []
-    names = (["large amplitude", "small amplitude"] if n_clusters == 2
-             else ["spikes"])
+    names = (["Cluster 1", "Cluster 2"] if n_clusters == 2
+             else ["Spike events"])
     for j in range(n_clusters):
         ax = fig.add_axes([left0 + j * (wave_frac + gap), bottom,
                            wave_frac, height], facecolor=BG)
@@ -318,7 +318,7 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
                         ha="right", va="bottom" if lvl > 0 else "top",
                         alpha=0.85)
         ax.set_xticks([-1, 0, 1, 2])
-        ax.set_xlabel("ms from trough", color=FG, fontsize=9)
+        ax.set_xlabel("ms (from trough)", color=FG, fontsize=9)
         if j == 0:
             ax.set_ylabel("µV", color=FG, fontsize=10)
         else:
@@ -524,7 +524,7 @@ def render(path: Path, out_dir: Path, duration: float, start,
 # --------------------------------------------------------------------- main --
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
-        description="Intan .dat -> MP4 (excerpt + accumulating spike overlay).",
+        description="Raw .dat -> MP4 (Full window + spike clusters).",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("files", nargs="*", type=Path,
                    help="specific .dat files (default: one picked at random)")
@@ -534,12 +534,12 @@ def main(argv=None) -> int:
                    help="start time in s (default: scan for a clean window)")
     p.add_argument("-b", "--band", type=float, nargs=2,
                    metavar=("LOW", "HIGH"), default=list(DEFAULT_BAND),
-                   help="band-pass corners in Hz")
+                   help="band-pass limits in Hz")
     p.add_argument("--ylim", type=float, default=100.0,
-                   help="fixed +/- scale of the overview pane, in uV")
-    p.add_argument("--neg-k", type=float, default=6.0,
+                   help="voltage +/- scale of the overview pane, in uV")
+    p.add_argument("--neg-k", type=float, default=5.0,
                    help="detection threshold, in sigma below zero")
-    p.add_argument("--pos-k", type=float, default=7.0,
+    p.add_argument("--pos-k", type=float, default=8.0,
                    help="artifact rejection threshold, in sigma above zero")
     p.add_argument("--pre", type=float, default=1.0,
                    help="waveform window before the trough, in ms")
@@ -554,7 +554,7 @@ def main(argv=None) -> int:
                    help="spacing of candidate windows when scanning, in s")
     p.add_argument("--scan-range", type=float, nargs=2, default=None,
                    metavar=("FROM", "TO"), help="restrict the scan, in s")
-    p.add_argument("--artifact-k", type=float, default=25.0,
+    p.add_argument("--artifact-k", type=float, default=15.0,
                    help="a window is 'clean' if no sample exceeds this x sigma")
     p.add_argument("--any-window", action="store_true",
                    help="when scanning, do not prefer windows whose spike "
@@ -562,10 +562,10 @@ def main(argv=None) -> int:
     p.add_argument("--fps", type=int, default=60, help="video frame rate")
     p.add_argument("--size", type=int, nargs=2, metavar=("W", "H"),
                    default=[1600, 900], help="video resolution")
-    p.add_argument("--dpi", type=int, default=100, help="figure dpi")
+    p.add_argument("--dpi", type=int, default=220, help="figure dpi")
     p.add_argument("--slow", type=float, default=1.0,
                    help="slow-motion factor; audio pitch drops with it")
-    p.add_argument("--crf", type=int, default=18,
+    p.add_argument("--crf", type=int, default=16,
                    help="x264 quality, lower is better")
     p.add_argument("--fs", type=int, default=SAMPLE_RATE,
                    help="acquisition sample rate of the .dat files")

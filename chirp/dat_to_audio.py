@@ -36,7 +36,7 @@ FOLDER = Path.cwd()
 SAMPLE_RATE = 30000          # Hz, from settings.xml (SampleRateHertz)
 UV_PER_BIT = 0.195           # Intan RHD2000 amplifier scale factor
 BYTES_PER_SAMPLE = 2         # int16
-DEFAULT_BAND = (700.0, 8000.0)
+DEFAULT_BAND = (450.0, 8000.0)
 FILTER_ORDER = 4             # per direction; sosfiltfilt doubles it
 EDGE_PAD_S = 1.0             # extra signal read each side, trimmed after filtering
 
@@ -162,7 +162,7 @@ def main(argv=None) -> int:
                    help="specific .dat files (default: one picked at random)")
     p.add_argument("--all", action="store_true",
                    help="convert every amp-*.dat in the folder")
-    p.add_argument("-d", "--duration", type=float, default=20.0,
+    p.add_argument("-d", "--duration", type=float, default=10.0,
                    help="seconds to extract")
     p.add_argument("-s", "--start", type=float, default=None,
                    help="start time in seconds (default: centred in the file)")
