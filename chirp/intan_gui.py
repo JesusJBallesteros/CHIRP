@@ -152,6 +152,63 @@ class App(ttk.Frame):
         self._tab_video(nb)
         self._tab_output(nb)
 
+        # ---- statistics table, right hand side -------------------------
+        mid.columnconfigure(2, weight=2)            # the table gets the room
+        self._build_table(mid)
+
+    def _build_table(self, parent):
+        """Per-cluster statistics, filled in as each channel is analysed."""
+        tf = ttk.LabelFrame(parent, text="Cluster statistics", padding=6)
+        tf.grid(row=0, column=2, sticky="nsew", **PAD)
+        tf.rowconfigure(0, weight=1)
+        tf.columnconfigure(0, weight=1)
+
+        cols = [("channel", "channel", 96, "w"), ("cluster", "cl", 30, "center"),
+                ("n_spikes", "n", 46, "e"), ("mean_amplitude_uV", "amp uV", 58, "e"),
+                ("firing_rate_hz", "rate Hz", 60, "e"), ("snr", "SNR", 44, "e"),
+                ("half_width_ms", "HW ms", 52, "e"),
+                ("trough_to_peak_ms", "t2p ms", 54, "e"),
+                ("putative_type", "putative type", 88, "w")]
+        self.tree = ttk.Treeview(tf, columns=[c[0] for c in cols],
+                                 show="headings", height=14)
+        for key, title, width, anchor in cols:
+            self.tree.heading(key, text=title)
+            self.tree.column(key, width=width, anchor=anchor, stretch=False)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb = ttk.Scrollbar(tf, orient="vertical", command=self.tree.yview)
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb = ttk.Scrollbar(tf, orient="horizontal", command=self.tree.xview)
+        hsb.grid(row=1, column=0, sticky="ew")
+        self.tree.config(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        # Rows are tinted by cluster index, matching the video's pane colours.
+        for j, colour in enumerate(eng_video.CLUSTER_COLORS):
+            self.tree.tag_configure(f"c{j}", foreground=colour)
+
+        row = ttk.Frame(tf)
+        row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        ttk.Button(row, text="Clear", width=7,
+                   command=lambda: self.tree.delete(*self.tree.get_children())) \
+            .pack(side="left", padx=2)
+        self.btn_report = ttk.Button(row, text="Show report", width=12,
+                                     command=self._reopen_report,
+                                     state="disabled")
+        self.btn_report.pack(side="left", padx=2)
+        self.lbl_rows = ttk.Label(row, text="")
+        self.lbl_rows.pack(side="right")
+
+    def _add_stat_rows(self, rows):
+        for r in rows:
+            self.tree.insert("", tk.END, tags=(f"c{(r['cluster'] - 1) % 3}",),
+                             values=(r["channel"], r["cluster"], r["n_spikes"],
+                                     f"{r['mean_amplitude_uV']:.1f}",
+                                     f"{r['firing_rate_hz']:.1f}",
+                                     f"{r['snr']:.1f}",
+                                     f"{r['half_width_ms']:.3f}",
+                                     f"{r['trough_to_peak_ms']:.2f}",
+                                     r["putative_type"]))
+        self.tree.yview_moveto(1.0)
+        self.lbl_rows.config(text=f"{len(self.tree.get_children())} cluster(s)")
+
     def _row(self, parent, r, label, var, width=12, hint=""):
         ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", **PAD)
         ttk.Entry(parent, textvariable=var, width=width) \
@@ -205,6 +262,8 @@ class App(ttk.Frame):
         self.v_slow = tk.StringVar(value="1")
         self.v_crf = tk.StringVar(value="16")
         self.v_wavefrac = tk.StringVar(value="0.26")
+        self.v_artifactk = tk.StringVar(value="18")
+        self.v_maxk = tk.StringVar(value="3")
         self._row(t, 0, "Frame rate (fps)", self.v_fps)
         self._row(t, 1, "Detection threshold (sigma)", self.v_negk,
                   hint="negative crossing")
@@ -220,7 +279,16 @@ class App(ttk.Frame):
         self._row(t, 5, "Slow motion factor", self.v_slow, hint="1 = real time")
         self._row(t, 6, "x264 quality (CRF)", self.v_crf, hint="lower = better")
         self._row(t, 7, "Cluster pane width", self.v_wavefrac,
-                  hint="fraction of frame, each pane")
+                  hint="fraction of frame, same for every pane")
+        self._row(t, 8, "Artifact scan threshold (sigma)", self.v_artifactk,
+                  hint="scan calls a window clean below this")
+        ttk.Label(t, text="Max clusters").grid(row=9, column=0, sticky="w",
+                                               **PAD)
+        ttk.Combobox(t, textvariable=self.v_maxk, values=["1", "2", "3"],
+                     width=9, state="readonly") \
+            .grid(row=9, column=1, sticky="w", **PAD)
+        ttk.Label(t, text="k-means tries 1 up to this many",
+                  foreground="#666").grid(row=9, column=2, sticky="w", **PAD)
 
     def _tab_output(self, nb):
         t = ttk.Frame(nb, padding=8)
@@ -228,8 +296,9 @@ class App(ttk.Frame):
         t.columnconfigure(1, weight=1)
         self.v_out = tk.StringVar(value="")
         self.v_name = tk.StringVar(value="{stem}_{start}s+{dur}s_{lo}-{hi}Hz")
-        self.v_wav = tk.BooleanVar(value=True)
+        self.v_wav = tk.BooleanVar(value=False)
         self.v_mp4 = tk.BooleanVar(value=True)
+        self.v_stats = tk.BooleanVar(value=True)
         self.v_ffmpeg = tk.StringVar(value="")
 
         ttk.Label(t, text="Output folder").grid(row=0, column=0, sticky="w", **PAD)
@@ -246,11 +315,17 @@ class App(ttk.Frame):
             .grid(row=3, column=1, sticky="w", **PAD)
         ttk.Checkbutton(t, text="Export video (.mp4)", variable=self.v_mp4) \
             .grid(row=4, column=1, sticky="w", **PAD)
-        ttk.Label(t, text="ffmpeg").grid(row=5, column=0, sticky="w", **PAD)
-        ttk.Entry(t, textvariable=self.v_ffmpeg).grid(row=5, column=1,
+        ttk.Checkbutton(t, text="Cluster statistics (CSV + report)",
+                        variable=self.v_stats) \
+            .grid(row=5, column=1, sticky="w", **PAD)
+        ttk.Label(t, text="writes chirp_cluster_stats.csv and "
+                          "chirp_cluster_summary.csv",
+                  foreground="#666").grid(row=6, column=1, sticky="w", **PAD)
+        ttk.Label(t, text="ffmpeg").grid(row=7, column=0, sticky="w", **PAD)
+        ttk.Entry(t, textvariable=self.v_ffmpeg).grid(row=7, column=1,
                                                       sticky="ew", **PAD)
         ttk.Button(t, text="...", width=3, command=self.pick_ffmpeg) \
-            .grid(row=5, column=2, **PAD)
+            .grid(row=7, column=2, **PAD)
 
     def _build_run_row(self):
         bar = ttk.Frame(self)
@@ -302,7 +377,13 @@ class App(ttk.Frame):
 
     def refresh_files(self):
         self.listbox.delete(0, tk.END)
-        self.paths = sorted(self.folder.glob("*.dat"))
+        # Intan drops non-amplifier .dat files beside the channels (time.dat,
+        # board-DIGITAL-IN-*.dat, supply.dat). Those are not signal channels
+        # and would decode to nonsense, so list amp-*.dat and fall back to
+        # every .dat only if a folder happens to have none.
+        amp = sorted(self.folder.glob("amp-*.dat"))
+        self.paths = amp or sorted(self.folder.glob("*.dat"))
+        fallback = not amp and bool(self.paths)
         try:
             fs = int(float(self.v_fs.get()))
         except ValueError:
@@ -313,8 +394,11 @@ class App(ttk.Frame):
         self.lbl_count.config(text=f"{len(self.paths)} file(s)")
         if not self.paths:
             self.log(f"No .dat files in {self.folder}")
+        elif fallback:
+            self.log(f"{len(self.paths)} .dat file(s) in {self.folder} "
+                     f"- no amp-*.dat found, so showing every .dat")
         else:
-            self.log(f"{len(self.paths)} .dat file(s) in {self.folder}")
+            self.log(f"{len(self.paths)} channel file(s) in {self.folder}")
 
     def log(self, msg):
         self.txt.config(state="normal")
@@ -340,8 +424,8 @@ class App(ttk.Frame):
         sel = self.listbox.curselection()
         if not sel:
             raise ValueError("Select at least one .dat file")
-        if not (self.v_wav.get() or self.v_mp4.get()):
-            raise ValueError("Tick at least one of the two export options")
+        if not (self.v_wav.get() or self.v_mp4.get() or self.v_stats.get()):
+            raise ValueError("Tick at least one of the output options")
 
         cfg = dict(
             files=[self.paths[i] for i in sel],
@@ -362,13 +446,20 @@ class App(ttk.Frame):
             slow=self._num(self.v_slow, "Slow motion factor"),
             crf=self._num(self.v_crf, "CRF", int),
             wavefrac=self._num(self.v_wavefrac, "Cluster pane width"),
+            artifactk=self._num(self.v_artifactk, "Artifact scan threshold"),
+            maxk=self._num(self.v_maxk, "Max clusters", int),
             out=Path(self.v_out.get().strip() or (self.folder / "converted")),
             name=self.v_name.get().strip() or "{stem}_{start}s+{dur}s_{lo}-{hi}Hz",
             wav=self.v_wav.get(), mp4=self.v_mp4.get(),
+            stats=self.v_stats.get(),
             ffmpeg=self.v_ffmpeg.get().strip(),
         )
         if cfg["dur"] <= 0:
             raise ValueError("Duration must be positive")
+        if not 1 <= cfg["maxk"] <= 3:
+            raise ValueError("Max clusters must be 1, 2 or 3")
+        if cfg["artifactk"] <= 0:
+            raise ValueError("Artifact scan threshold must be positive")
         if not 0 < cfg["lo"] < cfg["hi"] < cfg["fs"] / 2:
             raise ValueError(f"Band-pass must satisfy 0 < low < high < "
                              f"{cfg['fs'] / 2:.0f} Hz (Nyquist)")
@@ -385,6 +476,9 @@ class App(ttk.Frame):
             messagebox.showerror(APP_TITLE, str(e))
             return
         self.cancel_flag.clear()
+        if cfg["stats"]:                    # a run owns the table it fills
+            self.tree.delete(*self.tree.get_children())
+            self.lbl_rows.config(text="")
         self.btn_run.config(state="disabled")
         self.btn_cancel.config(state="normal")
         self.prog["value"] = 0
@@ -404,43 +498,63 @@ class App(ttk.Frame):
             # dat_to_video resolves ffmpeg via PATH; prepend ours for this run.
             os.environ["PATH"] = (str(Path(cfg["ffmpeg"]).parent) + os.pathsep
                                   + os.environ.get("PATH", ""))
-        n_jobs = len(cfg["files"]) * (int(cfg["wav"]) + int(cfg["mp4"]))
+        per_file = int(cfg["wav"]) + int(cfg["mp4"]) + int(cfg["stats"])
+        n_jobs = max(1, len(cfg["files"]) * per_file)
         done = 0
+        all_rows = []
+        band = (cfg["lo"], cfg["hi"])
         try:
             cfg["out"].mkdir(parents=True, exist_ok=True)
+            caveat = eng_video.shape_caveat(cfg["lo"])
+            if cfg["stats"] and caveat:
+                print(f"NOTE: {caveat}")
             for path in cfg["files"]:
                 if self.cancel_flag.is_set():
                     raise eng_video.Cancelled("cancelled")
                 self.q.put(("status", path.name))
 
                 start = cfg["start"]
-                if start is None and cfg["mp4"]:
+                if start is None and (cfg["mp4"] or cfg["stats"]):
                     start = eng_video.find_clean_window(
-                        path, cfg["dur"], (cfg["lo"], cfg["hi"]), cfg["fs"],
-                        60.0, 25.0, cfg["negk"], cfg["posk"], 1.0, 2.0, 1.0,
-                        None, True, True,
+                        path, cfg["dur"], band, cfg["fs"],
+                        60.0, cfg["artifactk"], cfg["negk"], cfg["posk"],
+                        1.0, 2.0, 1.0, None, True, True,
                         cancel=self.cancel_flag.is_set,
                         progress=lambda f, d=done: self.q.put(
-                            ("prog", (d + f) / max(1, n_jobs))))
+                            ("prog", (d + f) / n_jobs)),
+                        max_k=cfg["maxk"])
+                # Whatever the excerpt ends up being, every output for this
+                # channel must describe the same one.
+                eff_start = start if start is not None else (
+                    eng_audio.file_duration_s(path, cfg["fs"]) - cfg["dur"]) / 2
+                name = self._format_name(cfg, path, eff_start)
 
-                name = self._format_name(cfg, path, start)
+                if cfg["stats"]:
+                    rows, _ = eng_video.channel_stats(
+                        path, eff_start, cfg["dur"], band, cfg["fs"],
+                        cfg["negk"], cfg["posk"], max_k=cfg["maxk"])
+                    all_rows += rows
+                    self.q.put(("stats", rows))
+                    print(f"{path.name}: {len(rows)} cluster(s) - "
+                          + "; ".join(
+                              f"#{r['cluster']} {r['mean_amplitude_uV']:.0f} uV, "
+                              f"{r['firing_rate_hz']:.1f} Hz, SNR {r['snr']:.1f}, "
+                              f"{r['putative_type']}" for r in rows))
+                    done += 1
+                    self.q.put(("prog", done / n_jobs))
 
                 if cfg["wav"]:
                     eng_audio.convert(
-                        path, cfg["out"], cfg["dur"], start,
-                        (cfg["lo"], cfg["hi"]), cfg["fs"], cfg["resample"],
-                        cfg["bits"], cfg["headroom"], True,
-                        out_name=name + ".wav")
+                        path, cfg["out"], cfg["dur"], eff_start, band,
+                        cfg["fs"], cfg["resample"], cfg["bits"],
+                        cfg["headroom"], True, out_name=name + ".wav")
                     done += 1
-                    self.q.put(("prog", done / max(1, n_jobs)))
+                    self.q.put(("prog", done / n_jobs))
 
                 if cfg["mp4"]:
                     eng_video.render(
-                        path, cfg["out"], cfg["dur"],
-                        start if start is not None
-                        else (eng_audio.file_duration_s(path, cfg["fs"])
-                              - cfg["dur"]) / 2,
-                        (cfg["lo"], cfg["hi"]), cfg["fs"], cfg["fps"],
+                        path, cfg["out"], cfg["dur"], eff_start, band,
+                        cfg["fs"], cfg["fps"],
                         (cfg["w"], cfg["h"]), 100, cfg["slow"], cfg["crf"],
                         cfg["bits"], cfg["headroom"], cfg["ylim"],
                         cfg["negk"], cfg["posk"], 1.0, 2.0, 1.0,
@@ -448,10 +562,21 @@ class App(ttk.Frame):
                         out_stem=name,
                         cancel=self.cancel_flag.is_set,
                         progress=lambda f, d=done: self.q.put(
-                            ("prog", (d + f) / max(1, n_jobs))))
+                            ("prog", (d + f) / n_jobs)),
+                        max_k=cfg["maxk"])
                     done += 1
-                    self.q.put(("prog", done / max(1, n_jobs)))
-            self.q.put(("done", f"Finished. {done} file(s) written to "
+                    self.q.put(("prog", done / n_jobs))
+
+            if cfg["stats"] and all_rows:
+                s_csv = eng_video.write_stats_csv(
+                    all_rows, cfg["out"] / "chirp_cluster_stats.csv")
+                m_csv = eng_video.write_summary_csv(
+                    all_rows, cfg["out"] / "chirp_cluster_summary.csv")
+                print(f"  -> {s_csv.name} ({len(all_rows)} rows)")
+                print(f"  -> {m_csv.name}")
+                self.q.put(("report", self._build_report(all_rows, cfg,
+                                                         [s_csv, m_csv])))
+            self.q.put(("done", f"Finished. {done} job(s), output in "
                                 f"{cfg['out']}"))
         except eng_video.Cancelled:
             self.q.put(("done", "Cancelled."))
@@ -461,6 +586,97 @@ class App(ttk.Frame):
         finally:
             writer.flush()
             sys.stdout, sys.stderr = old_out, old_err
+
+    # -------------------------------------------------------------- report --
+    @staticmethod
+    def _build_report(rows, cfg, files):
+        """Plain-text summary of the whole run, shown at the end and logged."""
+        import statistics as st
+        from collections import Counter
+
+        per_ch = {}
+        for r in rows:
+            per_ch[r["channel"]] = r["n_clusters"]
+        kdist = Counter(per_ch.values())
+        types = Counter(r["putative_type"] for r in rows)
+
+        def pm(key, fmt):
+            vals = [r[key] for r in rows]
+            m = st.fmean(vals)
+            sd = st.pstdev(vals) if len(vals) > 1 else 0.0
+            return f"{fmt.format(m)} +/- {fmt.format(sd)}"
+
+        L = []
+        L.append("CHIRP - cluster statistics report")
+        L.append("=" * 60)
+        L.append(f"channels analysed   : {len(per_ch)}")
+        L.append(f"excerpt             : {cfg['dur']:.0f} s" + (
+            f" from {cfg['start']:.0f} s" if cfg["start"] is not None
+            else " per channel, auto-selected clean window"))
+        L.append(f"band-pass           : {cfg['lo']:.0f}-{cfg['hi']:.0f} Hz")
+        L.append(f"detect / reject     : -{cfg['negk']:g} sigma / "
+                 f"+{cfg['posk']:g} sigma")
+        L.append(f"artifact scan       : {cfg['artifactk']:g} sigma")
+        L.append(f"max clusters        : {cfg['maxk']}")
+        L.append("")
+        L.append("clusters per channel : " + ", ".join(
+            f"{k} cluster(s) x {v} channel(s)" for k, v in sorted(kdist.items())))
+        L.append(f"clusters in total    : {len(rows)}")
+        L.append(f"spikes in total      : {sum(r['n_spikes'] for r in rows)}")
+        L.append("")
+        L.append("across all clusters (mean +/- sd):")
+        L.append(f"  mean amplitude     : {pm('mean_amplitude_uV', '{:.1f}')} uV")
+        L.append(f"  firing rate        : {pm('firing_rate_hz', '{:.1f}')} Hz")
+        L.append(f"  SNR                : {pm('snr', '{:.1f}')}")
+        L.append(f"  half-width         : {pm('half_width_ms', '{:.3f}')} ms")
+        L.append(f"  trough-to-peak     : {pm('trough_to_peak_ms', '{:.2f}')} ms")
+        L.append(f"  noise sigma        : {pm('sigma_uV', '{:.2f}')} uV")
+        L.append("")
+        L.append("putative type (heuristic, from waveform shape):")
+        for t, c in types.most_common():
+            L.append(f"  {t:<14s} {c:3d} / {len(rows)} clusters")
+        L.append("")
+        L.append("written:")
+        for f in files:
+            L.append(f"  {f}")
+        caveat = eng_video.shape_caveat(cfg["lo"])
+        if caveat:
+            L.append("")
+            L.append("CAVEAT")
+            L.append("  " + caveat + ".")
+            L.append("  Amplitude, rate and SNR are unaffected; only the")
+            L.append("  excitatory/inhibitory column is in question.")
+        return "\n".join(L)
+
+    def _reopen_report(self):
+        if getattr(self, "_last_report", None):
+            self._show_report(self._last_report)
+
+    def _show_report(self, text):
+        self._last_report = text
+        self.btn_report.config(state="normal")
+        win = tk.Toplevel(self)
+        win.title("CHIRP - final report")
+        win.geometry("620x560")
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+        txt = tk.Text(win, wrap="none", font=("Consolas", 9))
+        txt.grid(row=0, column=0, sticky="nsew")
+        sb = ttk.Scrollbar(win, orient="vertical", command=txt.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        txt.config(yscrollcommand=sb.set)
+        txt.insert("1.0", text)
+        txt.config(state="disabled")
+        bar = ttk.Frame(win)
+        bar.grid(row=1, column=0, columnspan=2, sticky="ew", pady=6)
+
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(text)
+
+        ttk.Button(bar, text="Copy", command=copy).pack(side="left", padx=6)
+        ttk.Button(bar, text="Close", command=win.destroy).pack(side="right",
+                                                                padx=6)
 
     @staticmethod
     def _format_name(cfg, path, start):
@@ -484,6 +700,12 @@ class App(ttk.Frame):
                     self.prog["value"] = max(0, min(1000, int(payload * 1000)))
                 elif kind == "status":
                     self.lbl_status.config(text=payload)
+                elif kind == "stats":
+                    self._add_stat_rows(payload)
+                elif kind == "report":
+                    self.log("")
+                    self.log(payload)
+                    self._show_report(payload)
                 elif kind == "done":
                     self.log(payload)
                     self.lbl_status.config(text="idle")
@@ -540,8 +762,8 @@ def main():
 
     root = tk.Tk()
     root.title(APP_TITLE)
-    root.geometry("1020x740")
-    root.minsize(880, 620)
+    root.geometry("1560x820")                # the statistics table needs room
+    root.minsize(1100, 660)
     try:
         ttk.Style().theme_use("vista")
     except tk.TclError:

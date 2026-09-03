@@ -39,12 +39,29 @@ overlaid and accumulating, aligned on the trough, plus the running mean in bold.
 - **Spike detection**: negative crossings of user defined units of sigma (−kσ), where σ = MAD/0.6745
   (Quiroga et al. 2004), taken at the trough with an adjustable refractory period.
 - **Artifact rejection**: events whose waveform reaches +qσ are discarded.
-- **Amplitude clustering**: 1-D k-means over trough amplitudes, accepted only
-  when the two groups are really separated, otherwise a single colour. Very simple but sufficient clustering.
+- **Amplitude clustering**: 1-D k-means over trough amplitudes, trying 1 to 3
+  clusters and keeping the largest count whose split is real — every cluster
+  populated, and *every adjacent pair* of centres separated by at least a
+  configurable multiple of their summed spread. Otherwise it falls back to a
+  single group. Very simple but sufficient clustering.
 - **Clean-window search**: scans the whole recording for the excerpt with the
   fewest artifacts and the clearest cluster split. Two-hour recordings are scanned in about 6 seconds.
 - **MP4 rendering** with audio muxed in. Frames and audio are generated
   from the same filtered array in one pass. No drift.
+- **Cluster statistics** (optional): spike count, mean trough amplitude,
+  firing rate, SNR (|mean trough| / σ), spike half-width, trough-to-peak
+  latency, and a heuristic putative excitatory/inhibitory label. Written as
+  two CSVs — one row per channel × cluster, plus a file averaged across
+  channels — and shown in the GUI table as the run progresses, with a summary
+  report at the end.
+
+> **On the putative excitatory/inhibitory column.** It is a shape heuristic
+> (half-width and trough-to-peak, with firing rate breaking ties), so every
+> label carries a `?`. It also depends on your band-pass: the published
+> thresholds assume a high-pass near 250–300 Hz, and a higher corner narrows
+> every waveform until broad units cross into the fast-spiking range. CHIRP
+> warns when the high-pass exceeds 400 Hz, and prints the caveat in the
+> report. Amplitude, rate and SNR are unaffected.
 
 ## Requirements
 
@@ -102,7 +119,10 @@ python chirp/dat_to_video.py amp-A-010.dat --pos-k 12 --slow 4
 | `--band LOW HIGH` | band-pass corners in Hz |
 | `--duration` / `--start` | excerpt length and offset; blank start = auto |
 | `--neg-k` / `--pos-k` | detection and artifact-rejection thresholds, in σ |
+| `--artifact-k` | σ above which the clean-window scan calls a window dirty (default 18) |
+| `--max-clusters` | most amplitude clusters to consider, 1–3 (default 3) |
 | `--window` / `--slow` | detail pane width in ms; slow-motion factor |
+| `--wave-width` | width of each cluster pane, as a fraction of the frame |
 | `--resample` / `--bit-depth` | WAV output rate and depth |
 | `--fs` | acquisition rate, if not 30 kHz (check `settings.xml`) |
 

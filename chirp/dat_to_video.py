@@ -71,7 +71,7 @@ GRID = "#21262d"
 ENVELOPE = "#3d7f8c"
 PLAYHEAD = "#ff7043"
 THRESH = "#8b949e"
-CLUSTER_COLORS = ["#4dd0e1", "#ffb74d"]     # large amplitude, small amplitude
+CLUSTER_COLORS = ["#4dd0e1", "#ffb74d", "#b39ddb"]   # largest amplitude first
 REJECT_COLOR = "#6e7681"
 
 # Launching ffmpeg from a windowed (no-console) build would flash a black
@@ -159,37 +159,188 @@ def kmeans_1d(v, k=2, iters=100):
     return lab, c
 
 
-def cluster_amplitudes(amp, min_sep=2.0, min_frac=0.08, min_n=8):
+def cluster_amplitudes(amp, max_k=3, min_sep=2.0, min_frac=0.08, min_n=8):
     """
-    Split trough amplitudes into large/small groups, but only when the split is
-    real: both groups populated, and their centres separated by at least
-    `min_sep` times the summed within-group spread. Otherwise one group.
+    Group trough amplitudes into 1..max_k clusters.
 
-    Returns (labels, centres, separation) with label 0 = larger amplitude.
+    Takes the largest k whose split is real: every cluster populated, and every
+    *adjacent* pair of centres separated by at least `min_sep` times their
+    summed within-cluster spread. Adjacent pairs are what matters - with three
+    clusters, checking only the extremes would happily accept a middle group
+    smeared across the gap. Walks k down until one qualifies, ending at a
+    single group.
+
+    Returns (labels, centres, separation), label 0 = largest amplitude and
+    `separation` = the weakest adjacent-pair separation at the chosen k.
     """
-    if len(amp) < 2 * min_n:
-        return np.zeros(len(amp), dtype=int), np.array([amp.mean()]), 0.0
-    lab, c = kmeans_1d(amp, 2)
-    spreads = [amp[lab == j].std() for j in range(2)]
-    sizes = [int(np.sum(lab == j)) for j in range(2)]
-    sep = abs(c[0] - c[1]) / (spreads[0] + spreads[1] + 1e-9)
-    if (sep < min_sep or min(sizes) < min_n
-            or min(sizes) < min_frac * len(amp)):
-        return np.zeros(len(amp), dtype=int), np.array([amp.mean()]), sep
-    order = np.argsort(c)                          # most negative first
-    remap = np.zeros(2, dtype=int)
-    remap[order] = np.arange(2)
-    return remap[lab], c[order], sep
+    n = len(amp)
+    single = (np.zeros(n, dtype=int),
+              np.array([float(amp.mean()) if n else 0.0]), 0.0)
+    k_top = min(int(max_k), max(1, n // min_n))
+    for k in range(k_top, 1, -1):
+        lab, c = kmeans_1d(amp, k)
+        order = np.argsort(c)                      # most negative first
+        remap = np.empty(k, dtype=int)
+        remap[order] = np.arange(k)
+        lab, c = remap[lab], c[order]
+        sizes = np.array([int(np.sum(lab == j)) for j in range(k)])
+        if sizes.min() < min_n or sizes.min() < min_frac * n:
+            continue
+        sd = np.array([float(amp[lab == j].std()) for j in range(k)])
+        seps = [abs(c[j + 1] - c[j]) / (sd[j] + sd[j + 1] + 1e-9)
+                for j in range(k - 1)]
+        if min(seps) >= min_sep:
+            return lab, c, float(min(seps))
+    return single
 
 
-def analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms):
+# --------------------------------------------------------- cluster metrics --
+# Extracellular waveform shape separates fast-spiking (mostly PV+ inhibitory)
+# units from broader-spiking putative excitatory ones. The thresholds below are
+# the usual cortical convention; they are a heuristic, not a ground truth, and
+# every label this produces is explicitly marked "?".
+FS_HALF_WIDTH_MS = 0.25        # trough width at half depth
+FS_TROUGH_PEAK_MS = 0.55       # trough to the following positive maximum
+RS_HALF_WIDTH_MS = 0.30
+RS_TROUGH_PEAK_MS = 0.60
+FS_RATE_HZ = 10.0              # tiebreaker in the ambiguous band
+
+
+def waveform_metrics(w, fs, n_pre):
+    """
+    Shape descriptors of one (mean) waveform, trough at index `n_pre`.
+
+    Returns (half_width_ms, trough_to_peak_ms, trough_uV, peak_uV).
+    """
+    trough = float(w[n_pre])
+    half = trough / 2.0                            # trough is negative
+    i = n_pre
+    while i > 0 and w[i] <= half:
+        i -= 1
+    j = n_pre
+    while j < len(w) - 1 and w[j] <= half:
+        j += 1
+    # One sample is 0.033 ms at 30 kHz, against a 0.25 ms decision threshold,
+    # so the crossings are interpolated - otherwise the half-width is quantised
+    # into ~8 possible values and the classification jitters on rounding alone.
+    def _cross(a, b):
+        ya, yb = w[a], w[b]
+        return a + (half - ya) / (yb - ya) if yb != ya else float(a)
+    left = _cross(i, i + 1) if i + 1 <= n_pre else float(i)
+    right = _cross(j, j - 1) if j - 1 >= n_pre else float(j)
+    half_width_ms = abs(right - left) / fs * 1000.0
+    post = w[n_pre:]
+    kpk = int(np.argmax(post)) if len(post) else 0
+    return (half_width_ms, kpk / fs * 1000.0, trough,
+            float(post[kpk]) if len(post) else 0.0)
+
+
+SHAPE_SAFE_HIGHPASS_HZ = 400.0     # above this, published thresholds drift
+
+
+def shape_caveat(band_low_hz):
+    """
+    Whether the band-pass makes the excitatory/inhibitory call unreliable.
+
+    The half-width and trough-to-peak thresholds in the literature assume a
+    high-pass around 250-300 Hz. A higher corner differentiates the waveform
+    and narrows every spike, which pushes broad units across the fast-spiking
+    boundary - so the labels stop meaning what they are named after.
+    """
+    if band_low_hz > SHAPE_SAFE_HIGHPASS_HZ:
+        return (f"high-pass at {band_low_hz:.0f} Hz narrows spike waveforms; "
+                f"excitatory/inhibitory labels are unreliable above "
+                f"{SHAPE_SAFE_HIGHPASS_HZ:.0f} Hz - prefer 250-300 Hz for "
+                f"shape-based typing")
+    return ""
+
+
+def putative_type(half_width_ms, trough_to_peak_ms, rate_hz):
+    """Heuristic excitatory/inhibitory call. Always returns a '?' label."""
+    if (half_width_ms < FS_HALF_WIDTH_MS
+            and trough_to_peak_ms < FS_TROUGH_PEAK_MS):
+        return "inhibitory?"
+    if (half_width_ms >= RS_HALF_WIDTH_MS
+            and trough_to_peak_ms >= RS_TROUGH_PEAK_MS):
+        return "excitatory?"
+    return "inhibitory?" if rate_hz > FS_RATE_HZ else "unclear"
+
+
+def cluster_stats(a, fs, duration, pre_ms):
+    """
+    Per-cluster descriptive statistics from an `analyse()` result.
+
+    SNR is |mean trough| / sigma, sigma being the MAD-based noise estimate the
+    detector itself used - so an SNR of 6 means the mean spike sits at the 6
+    sigma the threshold was set from.
+    """
+    n_pre = int(round(pre_ms * fs / 1000))
+    rows = []
+    for j in range(len(a["centres"])):
+        sel = a["labels"] == j
+        n = int(np.sum(sel))
+        if n == 0:
+            continue
+        mean_wave = a["waves"][sel].mean(axis=0)
+        hw, t2p, trough, peak = waveform_metrics(mean_wave, fs, n_pre)
+        amp_mean = float(a["amp"][sel].mean())
+        rate = n / duration if duration > 0 else 0.0
+        snr = abs(amp_mean) / a["sigma"] if a["sigma"] > 0 else 0.0
+        rows.append(dict(
+            cluster=j + 1, n_spikes=n,
+            mean_amplitude_uV=amp_mean,
+            amplitude_sd_uV=float(a["amp"][sel].std()),
+            firing_rate_hz=rate, snr=snr,
+            half_width_ms=hw, trough_to_peak_ms=t2p,
+            peak_uV=peak, sigma_uV=a["sigma"],
+            putative_type=putative_type(hw, t2p, rate)))
+    return rows
+
+
+STAT_FIELDS = ["channel", "cluster", "n_clusters", "n_spikes",
+               "mean_amplitude_uV", "amplitude_sd_uV", "firing_rate_hz",
+               "snr", "half_width_ms", "trough_to_peak_ms", "peak_uV",
+               "sigma_uV", "putative_type", "n_rejected", "start_s",
+               "duration_s"]
+
+
+def load_excerpt(path, start, duration, band, fs):
+    """Read and band-pass one excerpt, padded then trimmed at the edges."""
+    total_s = file_duration_s(path, fs)
+    if start < 0 or start + duration > total_s:
+        raise ValueError(f"{start:.1f}+{duration:.1f} s exceeds "
+                         f"{path.name} ({total_s:.1f} s)")
+    pad = min(EDGE_PAD_S, start, total_s - (start + duration))
+    seg = read_segment(path, start - pad, duration + 2 * pad, fs)
+    sig = bandpass(seg, band[0], band[1], fs)
+    n_pad, n_keep = int(round(pad * fs)), int(round(duration * fs))
+    if n_pad:
+        sig = sig[n_pad:n_pad + n_keep]
+    return sig[:n_keep]
+
+
+def channel_stats(path, start, duration, band, fs, neg_k, pos_k,
+                  pre_ms=1.0, post_ms=2.0, refractory_ms=1.0, max_k=3):
+    """Statistics for one channel, as rows ready for the CSV / GUI table."""
+    sig = load_excerpt(path, start, duration, band, fs)
+    a = analyse(sig, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms,
+                max_k=max_k)
+    rows = cluster_stats(a, fs, duration, pre_ms)
+    for r in rows:
+        r.update(channel=path.stem, n_clusters=len(a["centres"]),
+                 n_rejected=a["n_rej"], start_s=round(start, 3),
+                 duration_s=duration)
+    return rows, a
+
+
+def analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms, max_k=3):
     """Detect, reject artifacts and cluster - the one path used everywhere."""
     waves, idx, sigma, n_rej, rej_idx = detect_spikes(
         x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms)
     n_pre = int(round(pre_ms * fs / 1000))
     if len(waves):
         amp = waves[:, n_pre]
-        labels, centres, sep = cluster_amplitudes(amp)
+        labels, centres, sep = cluster_amplitudes(amp, max_k=max_k)
     else:
         amp = np.zeros(0)
         labels, centres, sep = np.zeros(0, dtype=int), np.array([0.0]), 0.0
@@ -200,13 +351,13 @@ def analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms):
                 amp=amp, labels=labels, centres=centres,
                 sep=sep, n=len(idx), peak=float(np.abs(x).max()) if len(x) else 0.0,
                 score=len(idx) * (1 - n_rej / n_ev) if n_ev else 0.0,
-                clustered=len(centres) == 2)
+                clustered=len(centres) > 1)
 
 
 def find_clean_window(path, duration, band, fs, step, artifact_k,
                       neg_k, pos_k, pre_ms, post_ms, refractory_ms,
                       search_range=None, prefer_clusters=True, verbose=True,
-                      cancel=None, progress=None):
+                      cancel=None, progress=None, max_k=3):
     """
     Scan candidate start times and pick the best window. "Best" means free of
     large artifacts, then - since the point of the video is to show the two
@@ -225,7 +376,8 @@ def find_clean_window(path, duration, band, fs, step, artifact_k,
     for i, s0 in enumerate(starts):
         x = bandpass(read_segment(path, float(s0), duration, fs),
                      band[0], band[1], fs)
-        a = analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms)
+        a = analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms,
+                    max_k=max_k)
         rows.append((float(s0), a["score"], a["n"], a["n_rej"], a["peak"],
                      a["sigma"], a["sep"],
                      float(a["peak"] < artifact_k * a["sigma"]),
@@ -292,17 +444,24 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
     # Each pane is deliberately much narrower than half the figure: squeezing
     # the same 3 ms into less width steepens the trough, which is what makes
     # the spike read as sharp rather than as a smooth dip.
-    gap = 0.055
+    gap = 0.05
     row = fig.get_axes()[0].get_position()          # borrow the top pane's rows
     bottom, height = 0.085, row.y0 - 0.085 - 0.115
+    # Pane width is held constant whatever the cluster count, so a spike looks
+    # the same whether one cluster was found or three. It is only narrowed if
+    # the requested width genuinely cannot fit the panes side by side.
+    span_l, span_r = 0.07, 0.985
+    span = span_r - span_l
+    if n_clusters * wave_frac + (n_clusters - 1) * gap > span:
+        wave_frac = (span - (n_clusters - 1) * gap) / n_clusters
     total = n_clusters * wave_frac + (n_clusters - 1) * gap
-    left0 = (1.0 - total) / 2.0
+    left0 = span_l + (span - total) / 2.0
 
     t_ms = (np.arange(waves.shape[1]) - int(round(pre_ms * fs / 1000))) \
         / fs * 1000.0
     axes_w, traces, means, titles = [], [], [], []
-    names = (["Cluster 1", "Cluster 2"] if n_clusters == 2
-             else ["Spike events"])
+    names = ([f"Cluster {j + 1}" for j in range(n_clusters)]
+             if n_clusters > 1 else ["Spike events"])
     for j in range(n_clusters):
         ax = fig.add_axes([left0 + j * (wave_frac + gap), bottom,
                            wave_frac, height], facecolor=BG)
@@ -365,24 +524,16 @@ def render(path: Path, out_dir: Path, duration: float, start,
            bit_depth: int, headroom_db: float, ylim_uv: float,
            neg_k: float, pos_k: float, pre_ms: float, post_ms: float,
            refractory_ms: float, wave_frac: float, keep_wav: bool,
-           out_stem: str | None = None, cancel=None, progress=None) -> Path:
+           out_stem: str | None = None, cancel=None, progress=None,
+           max_k: int = 3) -> Path:
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found on PATH")
 
     total_s = file_duration_s(path, fs)
-    if start + duration > total_s or start < 0:
-        raise ValueError(f"{start:.1f}+{duration:.1f} s exceeds "
-                         f"{path.name} ({total_s:.1f} s)")
+    sig = load_excerpt(path, start, duration, band, fs)
 
-    pad = min(EDGE_PAD_S, start, total_s - (start + duration))
-    seg = read_segment(path, start - pad, duration + 2 * pad, fs)
-    sig = bandpass(seg, band[0], band[1], fs)
-    n_pad, n_keep = int(round(pad * fs)), int(round(duration * fs))
-    if n_pad:
-        sig = sig[n_pad:n_pad + n_keep]
-    sig = sig[:n_keep]
-
-    a = analyse(sig, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms)
+    a = analyse(sig, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms,
+                max_k=max_k)
     waves, idx, sigma, n_rej = a["waves"], a["idx"], a["sigma"], a["n_rej"]
     amp, labels, centres, sep = a["amp"], a["labels"], a["centres"], a["sep"]
     n_clusters = len(centres)
@@ -415,10 +566,11 @@ def render(path: Path, out_dir: Path, duration: float, start,
           f"(Butterworth order {FILTER_ORDER}, zero-phase), sigma {sigma:.2f} uV")
     print(f"  {len(idx)} spikes accepted, {n_rej} rejected at "
           f"+{pos_k:g} sigma ({100 * n_rej / (len(idx) + n_rej):.1f}% of events)")
-    if n_clusters == 2:
-        print(f"  2 amplitude clusters: {centres[0]:.0f} uV (n={int(np.sum(labels == 0))}) "
-              f"and {centres[1]:.0f} uV (n={int(np.sum(labels == 1))}), "
-              f"separation {sep:.2f}")
+    if n_clusters > 1:
+        parts = ", ".join(f"{centres[k]:.0f} uV (n={int(np.sum(labels == k))})"
+                          for k in range(n_clusters))
+        print(f"  {n_clusters} amplitude clusters: {parts}, "
+              f"weakest separation {sep:.2f}")
     else:
         print(f"  single amplitude population (separation {sep:.2f} "
               f"below threshold) - one colour")
@@ -521,6 +673,69 @@ def render(path: Path, out_dir: Path, duration: float, start,
     return mp4_path
 
 
+def write_stats_csv(rows, path):
+    """One row per channel x cluster."""
+    import csv
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        wr = csv.DictWriter(fh, fieldnames=STAT_FIELDS, extrasaction="ignore")
+        wr.writeheader()
+        for r in rows:
+            wr.writerow({k: (round(v, 4) if isinstance(v, float) else v)
+                         for k, v in r.items()})
+    return path
+
+
+def write_summary_csv(rows, path):
+    """
+    Averages across channels: one row per cluster index, then an ALL row.
+
+    Averaging is over channels, so a cluster-2 row is the mean of every
+    channel that yielded a second cluster - the n_channels column says how
+    many that was, which matters when reading the means.
+    """
+    import csv
+    from collections import Counter
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    numeric = ["n_spikes", "mean_amplitude_uV", "amplitude_sd_uV",
+               "firing_rate_hz", "snr", "half_width_ms", "trough_to_peak_ms",
+               "peak_uV", "sigma_uV"]
+    fields = ["group", "n_channels", "n_cluster_rows"] + numeric         + ["dominant_putative_type"]
+
+    def block(name, subset):
+        if not subset:
+            return None
+        out = {"group": name,
+               "n_channels": len({r["channel"] for r in subset}),
+               "n_cluster_rows": len(subset)}
+        for k in numeric:
+            vals = [r[k] for r in subset if r.get(k) is not None]
+            out[k] = round(float(np.mean(vals)), 4) if vals else ""
+        types = Counter(r["putative_type"] for r in subset)
+        out["dominant_putative_type"] = (
+            f"{types.most_common(1)[0][0]} ({types.most_common(1)[0][1]}/"
+            f"{len(subset)})" if types else "")
+        return out
+
+    blocks = []
+    for c in sorted({r["cluster"] for r in rows}):
+        b = block(f"cluster {c}", [r for r in rows if r["cluster"] == c])
+        if b:
+            blocks.append(b)
+    allb = block("ALL", rows)
+    if allb:
+        blocks.append(allb)
+
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        wr = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
+        wr.writeheader()
+        for b in blocks:
+            wr.writerow(b)
+    return path
+
+
 # --------------------------------------------------------------------- main --
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(
@@ -547,6 +762,8 @@ def main(argv=None) -> int:
                    help="waveform window after the trough, in ms")
     p.add_argument("--refractory", type=float, default=1.0,
                    help="minimum spacing between detections, in ms")
+    p.add_argument("--max-clusters", type=int, default=3, choices=(1, 2, 3),
+                   help="most amplitude clusters to consider")
     p.add_argument("--wave-width", type=float, default=0.26,
                    help="width of each cluster pane, as a fraction of the "
                         "frame; well under 0.5 keeps the trough steep")
@@ -554,7 +771,7 @@ def main(argv=None) -> int:
                    help="spacing of candidate windows when scanning, in s")
     p.add_argument("--scan-range", type=float, nargs=2, default=None,
                    metavar=("FROM", "TO"), help="restrict the scan, in s")
-    p.add_argument("--artifact-k", type=float, default=15.0,
+    p.add_argument("--artifact-k", type=float, default=18.0,
                    help="a window is 'clean' if no sample exceeds this x sigma")
     p.add_argument("--any-window", action="store_true",
                    help="when scanning, do not prefer windows whose spike "
@@ -614,12 +831,13 @@ def main(argv=None) -> int:
                     t, args.duration, band, args.fs, args.scan_step,
                     args.artifact_k, args.neg_k, args.pos_k, args.pre,
                     args.post, args.refractory, args.scan_range,
-                    not args.any_window)
+                    not args.any_window, max_k=args.max_clusters)
             render(t, args.out_dir, args.duration, start, band, args.fs,
                    args.fps, args.size, args.dpi, args.slow, args.crf,
                    args.bit_depth, args.headroom, args.ylim, args.neg_k,
                    args.pos_k, args.pre, args.post, args.refractory,
-                   args.wave_width, not args.no_wav)
+                   args.wave_width, not args.no_wav,
+                   max_k=args.max_clusters)
         except Exception as exc:
             print(f"{t.name}: FAILED - {exc}", file=sys.stderr)
             failures += 1

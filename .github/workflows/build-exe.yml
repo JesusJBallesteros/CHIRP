@@ -1,8 +1,4 @@
 name: Build Windows executable
-
-# Tag a version to get a downloadable .exe:
-#     git tag v1.0.0 && git push origin v1.0.0
-# Or trigger it by hand from the Actions tab to just get a build artifact.
 on:
   push:
     tags:
