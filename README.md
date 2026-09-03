@@ -2,11 +2,11 @@
 
 **C**lustered **H**igh-frequency **I**ntan **R**ecording **P**layer
 
-Turn raw Intan RHD `.dat` recordings into things you can actually watch and
-listen to: band-passed audio excerpts, and videos of the spike waveforms
-accumulating in sync with that audio, coloured by amplitude cluster.
+Turn raw Intan RHD `.dat` recordings into clips you can actually watch and
+listen to: band-passed extracts from raw data, into audio and videos with the spike waveforms
+accumulating as they appear, pre-clustered and coloured by amplitude.
 
-Spikes played through a speaker chirp. Hence the name.
+Spikes played through a speaker chirp.
 
 ## Demo
 
@@ -17,26 +17,9 @@ Spikes played through a speaker chirp. Hence the name.
 preview above is silent and runs at 2×; the clip is the real thing, spikes
 appearing exactly as you hear them.
 
-<!--
-  The GIF above is a fallback, because GitHub does not render a player for a
-  video committed to the repository - a relative link to an .mp4 becomes a
-  download link, not a player.
-
-  To get a real inline player with sound: open this file on github.com, click
-  edit, and drag demo/SingleCh_10s_BP_450-8000Hz_2cluster.mp4 into the text
-  area. GitHub uploads it and pastes a URL of the form
-
-      https://github.com/user-attachments/assets/<uuid>
-
-  Put that URL on a line of its own, right here, and it renders as a video
-  player. Then the GIF and its link above can be deleted if you like.
--->
-
-![An output frame](docs/example_frame.png)
-
-*Top: the whole excerpt at a fixed µV scale, with detected troughs marked as the
-playhead passes them. Bottom: one narrow pane per amplitude cluster, waveforms
-overlaid and accumulating, aligned on the trough, running mean drawn bold.*
+*Top: the whole window at a fixed voltage scale, with detected troughs marked as the
+playhead passes them. Bottom: narrow panes per amplitude cluster, waveforms
+overlaid and accumulating, aligned on the trough, plus the running mean in bold.*
 
 ## The GUI
 
@@ -46,26 +29,22 @@ overlaid and accumulating, aligned on the trough, running mean drawn bold.*
 
 ## What it does
 
-- Reads Intan **"one file per channel"** recordings (`amp-<port>-<chan>.dat`):
+- Reads Intan's **"one file per channel"** recordings (`amp-<port>-<chan>.dat`):
   headerless `int16` little-endian, 0.195 µV/bit. It seeks straight to the
-  requested byte offset, so a 20 s excerpt from a 500 MB channel costs a 1 MB
-  read, not 500 MB.
-- **Zero-phase band-pass** (Butterworth SOS, `sosfiltfilt`), with padding read
-  either side and trimmed afterwards so filter edge transients never reach the
-  output.
+  requested byte offset.
+- **Zero-phase band-pass** (Butterworth, `sosfiltfilt`), padded on both
+  sides and trimmed afterwards, no filter edge transients.
 - **WAV export** at the acquisition rate or resampled, 16-bit PCM or 32-bit
-  float, normalised against a high percentile rather than the raw peak so one
-  stimulation artifact cannot push the whole track into silence.
-- **Spike detection**: negative crossings of −kσ, where σ = MAD/0.6745
-  (Quiroga et al. 2004), taken at the trough with a refractory period.
-- **Artifact rejection**: events whose waveform also reaches +kσ are discarded.
+  float, volume normalised against a high percentile, not the raw.
+- **Spike detection**: negative crossings of user defined units of sigma (−kσ), where σ = MAD/0.6745
+  (Quiroga et al. 2004), taken at the trough with an adjustable refractory period.
+- **Artifact rejection**: events whose waveform reaches +qσ are discarded.
 - **Amplitude clustering**: 1-D k-means over trough amplitudes, accepted only
-  when the two groups are genuinely separated — otherwise a single colour.
+  when the two groups are really separated, otherwise a single colour. Very simple but sufficient clustering.
 - **Clean-window search**: scans the whole recording for the excerpt with the
-  fewest artifacts and the clearest cluster split. A 136-minute recording
-  sweeps in about 6 seconds.
-- **MP4 rendering** with the audio muxed in. Frames and audio are generated
-  from the same filtered array in one pass, so they cannot drift apart.
+  fewest artifacts and the clearest cluster split. Two-hour recordings are scanned in about 6 seconds.
+- **MP4 rendering** with audio muxed in. Frames and audio are generated
+  from the same filtered array in one pass. No drift.
 
 ## Requirements
 
@@ -73,7 +52,7 @@ overlaid and accumulating, aligned on the trough, running mean drawn bold.*
 - `numpy`, `scipy`, `matplotlib` (`pip install -r requirements.txt`)
 - `tkinter` for the GUI — bundled with python.org and most distributions
   (on Debian/Ubuntu: `sudo apt install python3-tk`)
-- **ffmpeg** on `PATH`, for MP4 output only. WAV export needs nothing extra.
+- **ffmpeg** on `PATH`, for MP4 output only.
 
 ## Quick start
 
@@ -89,13 +68,13 @@ pip install -r requirements.txt
 python chirp/intan_gui.py
 ```
 
-Browse to a recording folder, tick the channels, set the parameters across the
-four tabs, press **Run**. Work happens on a background thread, so the window
+Browse to a recording folder, select the channel/s, set the parameters,
+press **Run**. Work happens on a background thread, so the window
 stays responsive and **Cancel** interrupts a long render.
 
 ### Without the GUI
 
-Both scripts look for `amp-*.dat` in the **current directory** unless you pass
+Scripts look for `amp-*.dat` in the **current directory** unless you pass
 `--folder`.
 
 ```bash
@@ -115,7 +94,7 @@ python chirp/dat_to_video.py amp-A-010.dat --pos-k 12 --slow 4
 
 `--help` on either script lists every option.
 
-#### Options worth knowing
+#### Some options
 
 | Option | Meaning |
 |---|---|
@@ -127,17 +106,15 @@ python chirp/dat_to_video.py amp-A-010.dat --pos-k 12 --slow 4
 | `--resample` / `--bit-depth` | WAV output rate and depth |
 | `--fs` | acquisition rate, if not 30 kHz (check `settings.xml`) |
 
-> **On `--pos-k`.** Rejecting anything that crosses +7σ removes real artifacts,
+> **On `--pos-k`.** Rejecting anything that crosses +kσ removes real artifacts,
 > but on a healthy channel it also discards ordinary large spikes whose
-> positive rebound happens to be big — in our test data about 13% of events,
-> including the deepest spike in the window. If your artifacts are hundreds of
-> µV while your spikes are tens, a much higher `--pos-k` rejects the former
+> positive rebound happens to be big. If your artifacts are hundreds of
+> µV while your spikes are tens, a higher `--pos-k` rejects the former
 > without touching the latter. Check the accepted/rejected counts it prints.
 
 ## Building the standalone Windows executable
 
-The GUI can be packaged into a single double-clickable `.exe` that needs no
-Python and no installation.
+The GUI can be packaged into a single `.exe`.
 
 ```bash
 pip install pyinstaller
@@ -149,36 +126,31 @@ The result appears in `chirp/dist/`. Options:
 | Command | Result |
 |---|---|
 | `python chirp/build_exe.py` | one `.exe`, ffmpeg bundled if found on `PATH` |
-| `... --onedir` | a folder instead — starts in ~1 s rather than ~14 s |
-| `... --no-ffmpeg` | ~25 MB instead of ~217 MB; needs ffmpeg on `PATH` |
+| `... --onedir` | unpack on a permanent folder instead of a temporal one, faster start-up |
+| `... --no-ffmpeg` | lighter executable; needs ffmpeg on `PATH` |
 | `... --ffmpeg C:\path\ffmpeg.exe` | bundle a specific ffmpeg build |
 | `... --console` | keep a console window, for debugging |
 
-The `.exe` is **not** committed here — it is far too large for git. Either
-build it yourself with the above, or download it from the
-[Releases](https://github.com/JesusJBallesteros/CHIRP/releases) page: pushing a
-tag (`git tag v1.0.0 && git push origin v1.0.0`) builds it on GitHub and
-attaches it automatically.
+An `.exe` file is **not** committed. Either build it yourself with the above,
+or download it from the [Releases](https://github.com/JesusJBallesteros/CHIRP/releases) 
+page. The release build ships **without** ffmpeg, because of licencing reasons.
 
-The release build ships **without** ffmpeg, because the usual Windows ffmpeg
-builds are GPL and bundling one into an MIT release would pull the whole
-download under the GPL. So the downloaded `.exe` exports WAV out of the box,
-and needs ffmpeg installed for MP4. Building locally bundles whichever ffmpeg
-you already have.
+The downloaded `.exe` exports WAV out of the box, but needs ffmpeg installed for MP4.
+Building locally bundles whichever ffmpeg you already have.
 
 Notes on the executable:
 
-- **Size.** ~217 MB, almost entirely bundled ffmpeg (211 MB) plus numpy, scipy
-  and matplotlib. The project's own code is a few tens of kB.
-- **Startup.** A one-file build unpacks to a temp folder on each launch, so the
-  window takes ~14 s to appear. `--onedir` avoids this.
+- **Size.** ~217 MB: ffmpeg alone is 211 MB plus numpy, scipy
+  and matplotlib. The project's code is a few tens of kB.
+- **Startup.** A one-file build unpacks on each launch, so the
+  application takes ~14 s to start up. `--onedir` avoids this.
 - **Antivirus.** Unsigned PyInstaller executables sometimes trip heuristic
-  scanners. Building locally avoids the question entirely.
+  scanners. Building locally avoids the issue.
 - **Platform.** Windows x64. Run `build_exe.py` on macOS or Linux to get a
   binary for those.
 - **ffmpeg licensing.** ffmpeg is not redistributed in this repository. If you
   distribute a build with ffmpeg bundled, mind the licence of the ffmpeg build
-  you used — the common Windows builds are GPL.
+  you used.
 
 ## Repository layout
 
@@ -199,10 +171,9 @@ scaling are defined once and both paths stay consistent.
 
 ## Data format
 
-Verified against `settings.xml` (`SampleRateHertz="30000"`) and the `info.rhd`
-header (magic `0xC6912702`) of the recordings this was written for. If your
-acquisition rate differs, pass `--fs`. Only the "one file per channel" layout
-is supported — not the single-file `.rhd` format.
+Verified against INTAN's `settings.xml` and `info.rhd` metadata of the 
+recordings this was written for. If your acquisition rate differs, 
+pass `--fs`. Tested on "one file per channel" layout.
 
 ## Licence
 
