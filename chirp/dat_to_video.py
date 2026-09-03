@@ -195,15 +195,26 @@ def cluster_amplitudes(amp, max_k=3, min_sep=2.0, min_frac=0.08, min_n=8):
 
 
 # --------------------------------------------------------- cluster metrics --
-# Extracellular waveform shape separates fast-spiking (mostly PV+ inhibitory)
-# units from broader-spiking putative excitatory ones. The thresholds below are
-# the usual cortical convention; they are a heuristic, not a ground truth, and
-# every label this produces is explicitly marked "?".
-FS_HALF_WIDTH_MS = 0.25        # trough width at half depth
-FS_TROUGH_PEAK_MS = 0.55       # trough to the following positive maximum
-RS_HALF_WIDTH_MS = 0.30
-RS_TROUGH_PEAK_MS = 0.60
-FS_RATE_HZ = 10.0              # tiebreaker in the ambiguous band
+# ---------------------------------------------------------------------------
+# DISABLED: putative excitatory/inhibitory classification.
+#
+# The shape thresholds below are the usual cortical convention, but they assume
+# a high-pass near 250-300 Hz. At the corners this tool is typically used with,
+# every waveform narrows and almost everything classifies as fast-spiking, so
+# the labels would mislead more than they inform. Kept here, commented, until
+# the thresholds are validated against this preparation.
+#
+# The measurements it was built on - half_width_ms and trough_to_peak_ms - are
+# still computed and reported: they are observations, not claims about cell
+# type. Note they do shift with the band-pass, so compare them only between
+# recordings filtered the same way.
+#
+# FS_HALF_WIDTH_MS = 0.25        # trough width at half depth
+# FS_TROUGH_PEAK_MS = 0.55       # trough to the following positive maximum
+# RS_HALF_WIDTH_MS = 0.30
+# RS_TROUGH_PEAK_MS = 0.60
+# FS_RATE_HZ = 10.0              # tiebreaker in the ambiguous band
+# ---------------------------------------------------------------------------
 
 
 def waveform_metrics(w, fs, n_pre):
@@ -235,35 +246,40 @@ def waveform_metrics(w, fs, n_pre):
             float(post[kpk]) if len(post) else 0.0)
 
 
-SHAPE_SAFE_HIGHPASS_HZ = 400.0     # above this, published thresholds drift
-
-
-def shape_caveat(band_low_hz):
-    """
-    Whether the band-pass makes the excitatory/inhibitory call unreliable.
-
-    The half-width and trough-to-peak thresholds in the literature assume a
-    high-pass around 250-300 Hz. A higher corner differentiates the waveform
-    and narrows every spike, which pushes broad units across the fast-spiking
-    boundary - so the labels stop meaning what they are named after.
-    """
-    if band_low_hz > SHAPE_SAFE_HIGHPASS_HZ:
-        return (f"high-pass at {band_low_hz:.0f} Hz narrows spike waveforms; "
-                f"excitatory/inhibitory labels are unreliable above "
-                f"{SHAPE_SAFE_HIGHPASS_HZ:.0f} Hz - prefer 250-300 Hz for "
-                f"shape-based typing")
-    return ""
-
-
-def putative_type(half_width_ms, trough_to_peak_ms, rate_hz):
-    """Heuristic excitatory/inhibitory call. Always returns a '?' label."""
-    if (half_width_ms < FS_HALF_WIDTH_MS
-            and trough_to_peak_ms < FS_TROUGH_PEAK_MS):
-        return "inhibitory?"
-    if (half_width_ms >= RS_HALF_WIDTH_MS
-            and trough_to_peak_ms >= RS_TROUGH_PEAK_MS):
-        return "excitatory?"
-    return "inhibitory?" if rate_hz > FS_RATE_HZ else "unclear"
+# ---------------------------------------------------------------------------
+# DISABLED alongside the classification above - the caveat existed only to
+# qualify those labels.
+#
+# SHAPE_SAFE_HIGHPASS_HZ = 400.0     # above this, published thresholds drift
+#
+#
+# def shape_caveat(band_low_hz):
+#     """
+#     Whether the band-pass makes the excitatory/inhibitory call unreliable.
+#
+#     The half-width and trough-to-peak thresholds in the literature assume a
+#     high-pass around 250-300 Hz. A higher corner differentiates the waveform
+#     and narrows every spike, which pushes broad units across the fast-spiking
+#     boundary - so the labels stop meaning what they are named after.
+#     """
+#     if band_low_hz > SHAPE_SAFE_HIGHPASS_HZ:
+#         return (f"high-pass at {band_low_hz:.0f} Hz narrows spike waveforms; "
+#                 f"excitatory/inhibitory labels are unreliable above "
+#                 f"{SHAPE_SAFE_HIGHPASS_HZ:.0f} Hz - prefer 250-300 Hz for "
+#                 f"shape-based typing")
+#     return ""
+#
+#
+# def putative_type(half_width_ms, trough_to_peak_ms, rate_sp_s):
+#     """Heuristic excitatory/inhibitory call. Always returns a '?' label."""
+#     if (half_width_ms < FS_HALF_WIDTH_MS
+#             and trough_to_peak_ms < FS_TROUGH_PEAK_MS):
+#         return "inhibitory?"
+#     if (half_width_ms >= RS_HALF_WIDTH_MS
+#             and trough_to_peak_ms >= RS_TROUGH_PEAK_MS):
+#         return "excitatory?"
+#     return "inhibitory?" if rate_sp_s > FS_RATE_HZ else "unclear"
+# ---------------------------------------------------------------------------
 
 
 def cluster_stats(a, fs, duration, pre_ms):
@@ -290,18 +306,18 @@ def cluster_stats(a, fs, duration, pre_ms):
             cluster=j + 1, n_spikes=n,
             mean_amplitude_uV=amp_mean,
             amplitude_sd_uV=float(a["amp"][sel].std()),
-            firing_rate_hz=rate, snr=snr,
+            firing_rate_sp_s=rate, snr=snr,
             half_width_ms=hw, trough_to_peak_ms=t2p,
-            peak_uV=peak, sigma_uV=a["sigma"],
-            putative_type=putative_type(hw, t2p, rate)))
+            peak_uV=peak, sigma_uV=a["sigma"]))
+            # putative_type=putative_type(hw, t2p, rate)))   # DISABLED
     return rows
 
 
-STAT_FIELDS = ["channel", "cluster", "n_clusters", "n_spikes",
-               "mean_amplitude_uV", "amplitude_sd_uV", "firing_rate_hz",
-               "snr", "half_width_ms", "trough_to_peak_ms", "peak_uV",
-               "sigma_uV", "putative_type", "n_rejected", "start_s",
-               "duration_s"]
+STAT_FIELDS = ["channel", "segment", "start_s", "duration_s", "cluster",
+               "n_clusters", "n_spikes", "mean_amplitude_uV",
+               "amplitude_sd_uV", "firing_rate_sp_s", "snr", "half_width_ms",
+               "trough_to_peak_ms", "peak_uV", "sigma_uV", "n_rejected"]
+               # "putative_type" removed while the classification is disabled
 
 
 def load_excerpt(path, start, duration, band, fs):
@@ -320,14 +336,20 @@ def load_excerpt(path, start, duration, band, fs):
 
 
 def channel_stats(path, start, duration, band, fs, neg_k, pos_k,
-                  pre_ms=1.0, post_ms=2.0, refractory_ms=1.0, max_k=3):
-    """Statistics for one channel, as rows ready for the CSV / GUI table."""
+                  pre_ms=1.0, post_ms=2.0, refractory_ms=1.0, max_k=3,
+                  segment=1):
+    """
+    Statistics for one channel over one excerpt, as rows ready for the CSV /
+    GUI table. `segment` records which ranked window this was, so several
+    excerpts from the same channel stay distinguishable in the output.
+    """
     sig = load_excerpt(path, start, duration, band, fs)
     a = analyse(sig, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms,
                 max_k=max_k)
     rows = cluster_stats(a, fs, duration, pre_ms)
     for r in rows:
-        r.update(channel=path.stem, n_clusters=len(a["centres"]),
+        r.update(channel=path.stem, segment=segment,
+                 n_clusters=len(a["centres"]),
                  n_rejected=a["n_rej"], start_s=round(start, 3),
                  duration_s=duration)
     return rows, a
@@ -354,23 +376,28 @@ def analyse(x, fs, neg_k, pos_k, pre_ms, post_ms, refractory_ms, max_k=3):
                 clustered=len(centres) > 1)
 
 
-def find_clean_window(path, duration, band, fs, step, artifact_k,
+def find_best_windows(path, duration, band, fs, step, artifact_k,
                       neg_k, pos_k, pre_ms, post_ms, refractory_ms,
                       search_range=None, prefer_clusters=True, verbose=True,
-                      cancel=None, progress=None, max_k=3):
+                      cancel=None, progress=None, max_k=3, top_n=1):
     """
-    Scan candidate start times and pick the best window. "Best" means free of
-    large artifacts, then - since the point of the video is to show the two
-    amplitude classes - one where the split is genuinely separated, and only
-    then the one with the most accepted spikes. Each candidate costs a single
-    short read, so the whole recording sweeps in seconds.
+    Scan candidate start times and rank them. "Best" means free of large
+    artifacts, then - since the point of the video is to show the amplitude
+    classes - one where the split is genuinely separated, and only then the one
+    with the most accepted spikes. Each candidate costs a single short read, so
+    the whole recording sweeps in seconds.
+
+    Returns up to `top_n` start times, best first. Chosen windows are kept at
+    least `duration` apart: with a scan step finer than the excerpt they would
+    otherwise overlap, and statistics computed over overlapping windows would
+    count the same spikes more than once.
     """
     total = file_duration_s(path, fs)
     lo, hi = search_range or (0.0, total - duration)
     lo, hi = max(0.0, lo), min(total - duration, hi)
     starts = np.arange(lo, hi, step)
     if len(starts) == 0:
-        return lo
+        return [lo]
 
     rows = []
     for i, s0 in enumerate(starts):
@@ -393,19 +420,35 @@ def find_clean_window(path, duration, band, fs, step, artifact_k,
     if len(pool) == 0:
         pool = v
     if prefer_clusters and np.any(pool[:, 8] > 0):
-        pool = pool[pool[:, 8] > 0]                # two separated amplitudes
-    best = pool[np.argmax(pool[:, 1])]
+        pool = pool[pool[:, 8] > 0]                # separated amplitudes
+
+    ranked = pool[np.argsort(-pool[:, 1])]
+    chosen = []
+    for r in ranked:                               # greedy, non-overlapping
+        if all(abs(r[0] - c) >= duration for c in chosen):
+            chosen.append(float(r[0]))
+        if len(chosen) >= max(1, top_n):
+            break
 
     if verbose:
         print(f"  {len(v)} candidate windows, {int(v[:, 7].sum())} artifact-free "
               f"(peak < {artifact_k:g} sigma), "
-              f"{int(v[:, 8].sum())} with two separated amplitude clusters")
-        for r in pool[np.argsort(-pool[:, 1])][:5]:
+              f"{int(v[:, 8].sum())} with separated amplitude clusters")
+        for r in ranked[:max(5, top_n)]:
+            mark = ""
+            if r[0] in chosen:
+                rank = chosen.index(r[0]) + 1
+                mark = "  <-- best" if rank == 1 else f"  <-- #{rank}"
             print(f"    start {r[0]:8.1f} s  spikes {int(r[2]):4d}  "
                   f"rejected {int(r[3]):3d}  peak {r[4]:5.0f} uV  "
-                  f"cluster sep {r[6]:4.2f}"
-                  + ("  <-- chosen" if r[0] == best[0] else ""))
-    return float(best[0])
+                  f"cluster sep {r[6]:4.2f}" + mark)
+    return chosen
+
+
+def find_clean_window(*args, **kwargs):
+    """Single best window - thin wrapper over find_best_windows()."""
+    kwargs.pop("top_n", None)
+    return find_best_windows(*args, top_n=1, **kwargs)[0]
 
 
 # ------------------------------------------------------------- figure build --
@@ -674,7 +717,7 @@ def render(path: Path, out_dir: Path, duration: float, start,
 
 
 def write_stats_csv(rows, path):
-    """One row per channel x cluster."""
+    """One row per channel x segment x cluster."""
     import csv
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -689,34 +732,38 @@ def write_stats_csv(rows, path):
 
 def write_summary_csv(rows, path):
     """
-    Averages across channels: one row per cluster index, then an ALL row.
+    Averages across channels and segments: one row per cluster index, then an
+    ALL row.
 
-    Averaging is over channels, so a cluster-2 row is the mean of every
-    channel that yielded a second cluster - the n_channels column says how
-    many that was, which matters when reading the means.
+    Averaging is over every channel x segment row, so a cluster-2 row is the
+    mean of every excerpt that yielded a second cluster - n_channels and
+    n_cluster_rows say how many that was, which matters when reading the means.
     """
     import csv
-    from collections import Counter
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     numeric = ["n_spikes", "mean_amplitude_uV", "amplitude_sd_uV",
-               "firing_rate_hz", "snr", "half_width_ms", "trough_to_peak_ms",
-               "peak_uV", "sigma_uV"]
-    fields = ["group", "n_channels", "n_cluster_rows"] + numeric         + ["dominant_putative_type"]
+               "firing_rate_sp_s", "snr", "half_width_ms",
+               "trough_to_peak_ms", "peak_uV", "sigma_uV"]
+    fields = (["group", "n_channels", "n_segments", "n_cluster_rows"]
+              + numeric)
 
     def block(name, subset):
         if not subset:
             return None
         out = {"group": name,
                "n_channels": len({r["channel"] for r in subset}),
+               "n_segments": len({(r["channel"], r.get("segment", 1))
+                                  for r in subset}),
                "n_cluster_rows": len(subset)}
         for k in numeric:
             vals = [r[k] for r in subset if r.get(k) is not None]
             out[k] = round(float(np.mean(vals)), 4) if vals else ""
-        types = Counter(r["putative_type"] for r in subset)
-        out["dominant_putative_type"] = (
-            f"{types.most_common(1)[0][0]} ({types.most_common(1)[0][1]}/"
-            f"{len(subset)})" if types else "")
+        # DISABLED with the classification:
+        # types = Counter(r["putative_type"] for r in subset)
+        # out["dominant_putative_type"] = (
+        #     f"{types.most_common(1)[0][0]} ({types.most_common(1)[0][1]}/"
+        #     f"{len(subset)})" if types else "")
         return out
 
     blocks = []

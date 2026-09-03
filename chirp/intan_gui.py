@@ -35,6 +35,11 @@ import dat_to_video as eng_video
 APP_TITLE = "CHIRP GUI"
 PAD = dict(padx=6, pady=3)
 
+# Statistics are averaged over this many of the best-scoring windows per
+# channel, rather than the single one that gets rendered - one excerpt is a
+# thin basis for a firing rate. Rendering still uses only the best of them.
+STAT_SEGMENTS = 3
+
 
 # --------------------------------------------------------------------- utils --
 def find_ffmpeg() -> str | None:
@@ -163,12 +168,15 @@ class App(ttk.Frame):
         tf.rowconfigure(0, weight=1)
         tf.columnconfigure(0, weight=1)
 
-        cols = [("channel", "channel", 96, "w"), ("cluster", "cl", 30, "center"),
-                ("n_spikes", "n", 46, "e"), ("mean_amplitude_uV", "amp uV", 58, "e"),
-                ("firing_rate_hz", "rate Hz", 60, "e"), ("snr", "SNR", 44, "e"),
+        cols = [("channel", "channel", 96, "w"), ("segment", "seg", 34, "center"),
+                ("start_s", "start s", 60, "e"),
+                ("cluster", "cl", 30, "center"),
+                ("n_spikes", "n", 46, "e"),
+                ("mean_amplitude_uV", "amp uV", 58, "e"),
+                ("firing_rate_sp_s", "rate sp/s", 64, "e"),
+                ("snr", "SNR", 44, "e"),
                 ("half_width_ms", "HW ms", 52, "e"),
-                ("trough_to_peak_ms", "t2p ms", 54, "e"),
-                ("putative_type", "putative type", 88, "w")]
+                ("trough_to_peak_ms", "t2p ms", 54, "e")]
         self.tree = ttk.Treeview(tf, columns=[c[0] for c in cols],
                                  show="headings", height=14)
         for key, title, width, anchor in cols:
@@ -199,13 +207,14 @@ class App(ttk.Frame):
     def _add_stat_rows(self, rows):
         for r in rows:
             self.tree.insert("", tk.END, tags=(f"c{(r['cluster'] - 1) % 3}",),
-                             values=(r["channel"], r["cluster"], r["n_spikes"],
+                             values=(r["channel"], r["segment"],
+                                     f"{r['start_s']:.0f}",
+                                     r["cluster"], r["n_spikes"],
                                      f"{r['mean_amplitude_uV']:.1f}",
-                                     f"{r['firing_rate_hz']:.1f}",
+                                     f"{r['firing_rate_sp_s']:.1f}",
                                      f"{r['snr']:.1f}",
                                      f"{r['half_width_ms']:.3f}",
-                                     f"{r['trough_to_peak_ms']:.2f}",
-                                     r["putative_type"]))
+                                     f"{r['trough_to_peak_ms']:.2f}"))
         self.tree.yview_moveto(1.0)
         self.lbl_rows.config(text=f"{len(self.tree.get_children())} cluster(s)")
 
@@ -505,41 +514,49 @@ class App(ttk.Frame):
         band = (cfg["lo"], cfg["hi"])
         try:
             cfg["out"].mkdir(parents=True, exist_ok=True)
-            caveat = eng_video.shape_caveat(cfg["lo"])
-            if cfg["stats"] and caveat:
-                print(f"NOTE: {caveat}")
             for path in cfg["files"]:
                 if self.cancel_flag.is_set():
                     raise eng_video.Cancelled("cancelled")
                 self.q.put(("status", path.name))
 
-                start = cfg["start"]
-                if start is None and (cfg["mp4"] or cfg["stats"]):
-                    start = eng_video.find_clean_window(
+                # Statistics run over the best STAT_SEGMENTS windows, so they
+                # describe the channel rather than one arbitrary excerpt.
+                # Rendering still uses only the single best of them.
+                segments = [cfg["start"]] if cfg["start"] is not None else []
+                if not segments and (cfg["mp4"] or cfg["stats"]):
+                    want = STAT_SEGMENTS if cfg["stats"] else 1
+                    segments = eng_video.find_best_windows(
                         path, cfg["dur"], band, cfg["fs"],
                         60.0, cfg["artifactk"], cfg["negk"], cfg["posk"],
                         1.0, 2.0, 1.0, None, True, True,
                         cancel=self.cancel_flag.is_set,
                         progress=lambda f, d=done: self.q.put(
                             ("prog", (d + f) / n_jobs)),
-                        max_k=cfg["maxk"])
-                # Whatever the excerpt ends up being, every output for this
-                # channel must describe the same one.
-                eff_start = start if start is not None else (
-                    eng_audio.file_duration_s(path, cfg["fs"]) - cfg["dur"]) / 2
+                        max_k=cfg["maxk"], top_n=want)
+                if not segments:
+                    segments = [(eng_audio.file_duration_s(path, cfg["fs"])
+                                 - cfg["dur"]) / 2]
+                # Everything rendered or exported describes segments[0].
+                eff_start = segments[0]
                 name = self._format_name(cfg, path, eff_start)
 
                 if cfg["stats"]:
-                    rows, _ = eng_video.channel_stats(
-                        path, eff_start, cfg["dur"], band, cfg["fs"],
-                        cfg["negk"], cfg["posk"], max_k=cfg["maxk"])
-                    all_rows += rows
-                    self.q.put(("stats", rows))
-                    print(f"{path.name}: {len(rows)} cluster(s) - "
-                          + "; ".join(
-                              f"#{r['cluster']} {r['mean_amplitude_uV']:.0f} uV, "
-                              f"{r['firing_rate_hz']:.1f} Hz, SNR {r['snr']:.1f}, "
-                              f"{r['putative_type']}" for r in rows))
+                    for rank, seg_start in enumerate(segments, start=1):
+                        if self.cancel_flag.is_set():
+                            raise eng_video.Cancelled("cancelled")
+                        rows, _ = eng_video.channel_stats(
+                            path, seg_start, cfg["dur"], band, cfg["fs"],
+                            cfg["negk"], cfg["posk"], max_k=cfg["maxk"],
+                            segment=rank)
+                        all_rows += rows
+                        self.q.put(("stats", rows))
+                        print(f"{path.name} segment {rank} "
+                              f"({seg_start:.0f} s): {len(rows)} cluster(s) - "
+                              + "; ".join(
+                                  f"#{r['cluster']} "
+                                  f"{r['mean_amplitude_uV']:.0f} uV, "
+                                  f"{r['firing_rate_sp_s']:.1f} sp/s, "
+                                  f"SNR {r['snr']:.1f}" for r in rows))
                     done += 1
                     self.q.put(("prog", done / n_jobs))
 
@@ -594,11 +611,13 @@ class App(ttk.Frame):
         import statistics as st
         from collections import Counter
 
-        per_ch = {}
+        # Cluster count is a property of one excerpt, so tally it per
+        # channel x segment rather than collapsing it onto the channel.
+        per_seg = {}
         for r in rows:
-            per_ch[r["channel"]] = r["n_clusters"]
-        kdist = Counter(per_ch.values())
-        types = Counter(r["putative_type"] for r in rows)
+            per_seg[(r["channel"], r["segment"])] = r["n_clusters"]
+        kdist = Counter(per_seg.values())
+        channels = {r["channel"] for r in rows}
 
         def pm(key, fmt):
             vals = [r[key] for r in rows]
@@ -609,43 +628,39 @@ class App(ttk.Frame):
         L = []
         L.append("CHIRP - cluster statistics report")
         L.append("=" * 60)
-        L.append(f"channels analysed   : {len(per_ch)}")
+        L.append(f"channels analysed   : {len(channels)}")
+        L.append(f"segments analysed   : {len(per_seg)} "
+                 f"({len(per_seg) / max(1, len(channels)):.1f} per channel)")
         L.append(f"excerpt             : {cfg['dur']:.0f} s" + (
             f" from {cfg['start']:.0f} s" if cfg["start"] is not None
-            else " per channel, auto-selected clean window"))
+            else f", best {STAT_SEGMENTS} non-overlapping windows per channel"
+                 f" (the first was rendered)"))
         L.append(f"band-pass           : {cfg['lo']:.0f}-{cfg['hi']:.0f} Hz")
         L.append(f"detect / reject     : -{cfg['negk']:g} sigma / "
                  f"+{cfg['posk']:g} sigma")
         L.append(f"artifact scan       : {cfg['artifactk']:g} sigma")
         L.append(f"max clusters        : {cfg['maxk']}")
         L.append("")
-        L.append("clusters per channel : " + ", ".join(
-            f"{k} cluster(s) x {v} channel(s)" for k, v in sorted(kdist.items())))
-        L.append(f"clusters in total    : {len(rows)}")
+        L.append("clusters per segment : " + ", ".join(
+            f"{k} cluster(s) x {v} segment(s)" for k, v in sorted(kdist.items())))
+        L.append(f"cluster rows in total: {len(rows)}")
         L.append(f"spikes in total      : {sum(r['n_spikes'] for r in rows)}")
         L.append("")
-        L.append("across all clusters (mean +/- sd):")
+        L.append("across all cluster rows (mean +/- sd):")
         L.append(f"  mean amplitude     : {pm('mean_amplitude_uV', '{:.1f}')} uV")
-        L.append(f"  firing rate        : {pm('firing_rate_hz', '{:.1f}')} Hz")
+        L.append(f"  firing rate        : {pm('firing_rate_sp_s', '{:.1f}')} sp/s")
         L.append(f"  SNR                : {pm('snr', '{:.1f}')}")
         L.append(f"  half-width         : {pm('half_width_ms', '{:.3f}')} ms")
         L.append(f"  trough-to-peak     : {pm('trough_to_peak_ms', '{:.2f}')} ms")
         L.append(f"  noise sigma        : {pm('sigma_uV', '{:.2f}')} uV")
         L.append("")
-        L.append("putative type (heuristic, from waveform shape):")
-        for t, c in types.most_common():
-            L.append(f"  {t:<14s} {c:3d} / {len(rows)} clusters")
-        L.append("")
         L.append("written:")
         for f in files:
             L.append(f"  {f}")
-        caveat = eng_video.shape_caveat(cfg["lo"])
-        if caveat:
-            L.append("")
-            L.append("CAVEAT")
-            L.append("  " + caveat + ".")
-            L.append("  Amplitude, rate and SNR are unaffected; only the")
-            L.append("  excitatory/inhibitory column is in question.")
+        L.append("")
+        L.append("note: half-width and trough-to-peak shift with the")
+        L.append("      band-pass, so compare them only between recordings")
+        L.append("      filtered the same way.")
         return "\n".join(L)
 
     def _reopen_report(self):

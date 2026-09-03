@@ -49,19 +49,16 @@ overlaid and accumulating, aligned on the trough, plus the running mean in bold.
 - **MP4 rendering** with audio muxed in. Frames and audio are generated
   from the same filtered array in one pass. No drift.
 - **Cluster statistics** (optional): spike count, mean trough amplitude,
-  firing rate, SNR (|mean trough| / σ), spike half-width, trough-to-peak
-  latency, and a heuristic putative excitatory/inhibitory label. Written as
-  two CSVs — one row per channel × cluster, plus a file averaged across
-  channels — and shown in the GUI table as the run progresses, with a summary
+  firing rate in sp/s, SNR (|mean trough| / σ), spike half-width and
+  trough-to-peak latency. Computed over the **best three non-overlapping
+  windows per channel**, not just the one that gets rendered, so a firing rate
+  rests on more than a single excerpt. Written as two CSVs — one row per
+  channel × segment × cluster, plus a file averaged across channels and
+  segments — and shown in the GUI table as the run progresses, with a summary
   report at the end.
 
-> **On the putative excitatory/inhibitory column.** It is a shape heuristic
-> (half-width and trough-to-peak, with firing rate breaking ties), so every
-> label carries a `?`. It also depends on your band-pass: the published
-> thresholds assume a high-pass near 250–300 Hz, and a higher corner narrows
-> every waveform until broad units cross into the fast-spiking range. CHIRP
-> warns when the high-pass exceeds 400 Hz, and prints the caveat in the
-> report. Amplitude, rate and SNR are unaffected.
+> Half-width and trough-to-peak shift with the band-pass, so compare them only
+> between recordings filtered the same way.
 
 ## Requirements
 
