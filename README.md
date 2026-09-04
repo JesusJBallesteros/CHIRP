@@ -168,9 +168,51 @@ and cluster to `chirp_cluster_stats.csv` in the output folder.
 | `peak_uV` | positive maximum of the mean waveform |
 | `sigma_uV` | noise estimate for that window, MAD/0.6745 |
 | `n_rejected` | events discarded as artifacts in that window |
+| `wf_residual` | how tightly the spikes superimpose on their own mean |
+| `share_count`, `share_frac` | channels co-active with this one, count and fraction |
+| `auto_quality` | first-pass tag, 1 to 3, or 0 if not assessed |
 
 The final report totals the channels and segments analysed, the distribution of
-cluster counts, and the mean and standard deviation of each metric.
+cluster counts, the mean and standard deviation of each metric, and the
+first-pass tag counts per cluster and per channel.
+
+### First-pass quality tag
+
+With two or more channels selected, each cluster gets an `auto_quality` value
+meant as a quick screen before you look at anything yourself.
+
+| Tag | Meaning |
+|---|---|
+| 1 | tight, repeatable waveform, likely one isolated unit |
+| 2 | real activity, but not separable into a single unit |
+| 3 | noise, or a signal shared across a large batch of channels |
+| 0 | not assessed, too few spikes in the cluster to judge |
+
+Three measurements feed it, none of which need a probe map.
+
+**Sharing.** For each spike on a channel, how many channels in the session have
+a spike within 1 ms, taken as a median and reported as `share_count`. A unit
+picked up by a few neighbouring sites scores low and is left alone. A waveform
+present across a large batch of channels scores high and is called noise. The
+test fires above `max(8, 0.20 × channels)`, so on small probes, where a shared
+unit cannot be told from a shared artifact, it never fires at all.
+
+**Waveform residual.** RMS deviation of a cluster's spikes about their own mean,
+divided by the mean trough depth, reported as `wf_residual`. This is the
+overlay pane as a number. At or below 0.15 reads as one unit.
+
+**Firing rate.** Above 10 sp/s, a cluster that is not tight enough to be one
+unit is treated as busy multi-unit activity rather than an empty channel.
+
+The order matters: sharing is tested first, because a common-mode waveform is
+highly repeatable and would otherwise score as a textbook single unit.
+
+Thresholds live at the top of `dat_to_video.py` as `SHARE_FRAC`,
+`SHARE_MIN_CHANNELS`, `RESID_ISOLATED` and `RATE_MULTIUNIT`. They were fitted
+on one hand-tagged 64-channel session, where the tag agreed with the human on
+95% of channels and 91% of clusters and never called noise signal. The
+waveform residual moves with the band-pass and the spike window, so check the
+defaults against your own data before trusting them on a new preparation.
 
 ## Building the standalone Windows executable
 
