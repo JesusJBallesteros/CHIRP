@@ -2,9 +2,16 @@
 
 **C**lustered **H**igh-frequency **I**ntan **R**ecording **P**layer
 
-Turn raw Intan RHD `.dat` recordings into clips you can watch and listen to:
-band-passed extracts from raw data, into audio and videos with the spike
-waveforms accumulating as they appear, pre-clustered and coloured by amplitude.
+Size up an Intan recording session before committing it to a spike sorter.
+CHIRP reads the raw `.dat` files, detects spikes, splits them by amplitude,
+and reports per-cluster statistics with a first-pass tag separating isolated
+units from multi-unit activity and from noise. The numbers it produces are
+meant to be read before choosing parameters for a full sorter such as
+Kilosort, and are described in [Before a spike sorter](#before-a-spike-sorter).
+
+It also renders the same excerpt as audio and as video, with the spike
+waveforms accumulating as you hear them, which makes a session audible and
+watchable rather than only tabulated.
 
 Spikes played through a speaker chirp.
 
@@ -62,6 +69,14 @@ mean in bold.*
 
 > Half-width and trough-to-peak shift with the band-pass, so compare them only
 > between recordings filtered the same way.
+
+### What it is not
+
+The clustering is 1-D, on trough amplitude, within one channel. It does no
+template matching, uses no probe geometry, does not follow a unit across
+channels, and does not correct for drift. Two units of similar amplitude on
+the same channel will land in one cluster. Use it to decide whether a session
+is worth sorting and with what settings, not as the sorting itself.
 
 ## Requirements
 
@@ -213,6 +228,69 @@ on one hand-tagged 64-channel session, where the tag agreed with the human on
 95% of channels and 91% of clusters and never called noise signal. The
 waveform residual moves with the band-pass and the spike window, so check the
 defaults against your own data before trusting them on a new preparation.
+
+## Before a spike sorter
+
+CHIRP is not a spike sorter. It clusters on one dimension, trough amplitude,
+within a single channel, over a few short windows. A sorter such as Kilosort4
+uses template matching across channels, drift correction and the whole
+recording. What CHIRP gives you cheaply is a description of the material the
+sorter will be handed, in the units the sorter's own settings are expressed in.
+
+Run it across every channel with statistics on, read the report, then set up
+the sort.
+
+### Measurements that transfer directly
+
+| CHIRP output | Use it for | How |
+|---|---|---|
+| `share_frac` high across many channels | the channel map | Channels carrying one signal shared across a large batch are not contributing independent data. Leave them out of the probe map rather than asking the sorter to separate them. |
+| `sigma_uV` per channel | the channel map | A channel whose noise floor sits far from the session median is suspect. Very low usually means it is not in tissue, very high means it is picking up something it should not. |
+| peak µV reported by the window scan | `artifact_threshold` | Set it above your real spikes and below the excursions the scan reports, so the sorter blanks the artifact instead of building templates from it. |
+| `trough_to_peak_ms` and `half_width_ms` | `nt`, `nt0min` | The template window has to contain the trough and the repolarisation that follows it. Measured trough-to-peak tells you how much room that needs, and how much of the window should sit before the trough. |
+| `share_count` on good channels | `whitening_range`, `dmin`, `dminx`, `nearest_chans` | This is how many sites one unit actually reaches in your preparation, measured rather than assumed. Grouping and whitening neighbourhoods should be at least that wide. |
+| mean amplitude of one cluster across the three windows | `nblocks` | Windows are drawn from across the whole recording. If a cluster keeps its amplitude between windows hours apart, there is little drift to correct. If it does not, there is. |
+| band-pass corners you used | `highpass_cutoff` | Match the sorter's high-pass to the band CHIRP measured in, otherwise the waveform numbers above describe a differently filtered signal. |
+
+### Measurements that are indicative only
+
+`snr` here is the mean trough over the MAD noise estimate of the raw
+band-passed trace. Kilosort applies its detection thresholds (`Th_universal`,
+`Th_learned`, `Th_single_ch`) after whitening, so the numbers are not
+interchangeable and CHIRP's `--neg-k` should not be copied across. What does
+carry over is the shape of the distribution. If most of your clusters sit at
+an SNR of 5 to 7, a strict detection threshold will discard them, and if they
+sit at 15 the default will be comfortable.
+
+Cluster counts and firing rates give a rough expectation of yield. If CHIRP
+finds signal on 15 of 64 channels at a few spikes per second and the sorter
+returns hundreds of units firing at 40 sp/s, one of the two is wrong and it is
+worth finding out which before analysing the output.
+
+### A worked example
+
+A 64-channel session, 10 s windows, 450 to 8000 Hz:
+
+- 36 channels had `share_frac` near 0.37, meaning each of their spikes
+  coincided with about 24 of the 64 channels, against 0.05 for the rest. Those
+  channels carry one common signal and were dropped from the channel map.
+- Noise floor was 3.4 µV on that group and 6.0 µV on the others, with no
+  overlap, which confirmed the split rather than relying on the sharing
+  measure alone.
+- On the remaining channels, spikes reached about 3 sites each, so a whitening
+  neighbourhood of a few channels is enough and a wide one only adds noise.
+- Trough-to-peak ran 0.37 to 0.63 ms, comfortably inside a 2 ms template
+  window with room before the trough.
+- Tracking single clusters across windows up to two hours apart, mean
+  amplitude varied by 5.8% at the median and never more than 11.2%, so
+  aggressive drift correction was not needed. Firing rate varied far more, 18%
+  at the median, which is the biology rather than the electrode.
+- Peak excursions during the scan reached several hundred µV against spikes of
+  tens, giving a clear separation for an artifact threshold.
+
+This is a coarse survey and the windows are chosen to be clean, so it will
+under-report drift and artifacts compared to the full recording. Treat it as a
+starting point that a sorter run then refines.
 
 ## Building the standalone Windows executable
 
