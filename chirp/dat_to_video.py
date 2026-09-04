@@ -730,59 +730,6 @@ def write_stats_csv(rows, path):
     return path
 
 
-def write_summary_csv(rows, path):
-    """
-    Averages across channels and segments: one row per cluster index, then an
-    ALL row.
-
-    Averaging is over every channel x segment row, so a cluster-2 row is the
-    mean of every excerpt that yielded a second cluster - n_channels and
-    n_cluster_rows say how many that was, which matters when reading the means.
-    """
-    import csv
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    numeric = ["n_spikes", "mean_amplitude_uV", "amplitude_sd_uV",
-               "firing_rate_sp_s", "snr", "half_width_ms",
-               "trough_to_peak_ms", "peak_uV", "sigma_uV"]
-    fields = (["group", "n_channels", "n_segments", "n_cluster_rows"]
-              + numeric)
-
-    def block(name, subset):
-        if not subset:
-            return None
-        out = {"group": name,
-               "n_channels": len({r["channel"] for r in subset}),
-               "n_segments": len({(r["channel"], r.get("segment", 1))
-                                  for r in subset}),
-               "n_cluster_rows": len(subset)}
-        for k in numeric:
-            vals = [r[k] for r in subset if r.get(k) is not None]
-            out[k] = round(float(np.mean(vals)), 4) if vals else ""
-        # DISABLED with the classification:
-        # types = Counter(r["putative_type"] for r in subset)
-        # out["dominant_putative_type"] = (
-        #     f"{types.most_common(1)[0][0]} ({types.most_common(1)[0][1]}/"
-        #     f"{len(subset)})" if types else "")
-        return out
-
-    blocks = []
-    for c in sorted({r["cluster"] for r in rows}):
-        b = block(f"cluster {c}", [r for r in rows if r["cluster"] == c])
-        if b:
-            blocks.append(b)
-    allb = block("ALL", rows)
-    if allb:
-        blocks.append(allb)
-
-    with open(path, "w", newline="", encoding="utf-8") as fh:
-        wr = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
-        wr.writeheader()
-        for b in blocks:
-            wr.writerow(b)
-    return path
-
-
 # --------------------------------------------------------------------- main --
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(

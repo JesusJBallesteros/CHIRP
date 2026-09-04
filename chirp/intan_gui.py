@@ -327,8 +327,7 @@ class App(ttk.Frame):
         ttk.Checkbutton(t, text="Cluster statistics (CSV + report)",
                         variable=self.v_stats) \
             .grid(row=5, column=1, sticky="w", **PAD)
-        ttk.Label(t, text="writes chirp_cluster_stats.csv and "
-                          "chirp_cluster_summary.csv",
+        ttk.Label(t, text="writes chirp_cluster_stats.csv",
                   foreground="#666").grid(row=6, column=1, sticky="w", **PAD)
         ttk.Label(t, text="ffmpeg").grid(row=7, column=0, sticky="w", **PAD)
         ttk.Entry(t, textvariable=self.v_ffmpeg).grid(row=7, column=1,
@@ -587,12 +586,9 @@ class App(ttk.Frame):
             if cfg["stats"] and all_rows:
                 s_csv = eng_video.write_stats_csv(
                     all_rows, cfg["out"] / "chirp_cluster_stats.csv")
-                m_csv = eng_video.write_summary_csv(
-                    all_rows, cfg["out"] / "chirp_cluster_summary.csv")
                 print(f"  -> {s_csv.name} ({len(all_rows)} rows)")
-                print(f"  -> {m_csv.name}")
                 self.q.put(("report", self._build_report(all_rows, cfg,
-                                                         [s_csv, m_csv])))
+                                                         [s_csv])))
             self.q.put(("done", f"Finished. {done} job(s), output in "
                                 f"{cfg['out']}"))
         except eng_video.Cancelled:
