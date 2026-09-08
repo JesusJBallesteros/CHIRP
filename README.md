@@ -111,7 +111,21 @@ The four parameter tabs are:
 | Signal | start time, window duration, band-pass corners, acquisition rate |
 | Audio | resampling, bit depth, headroom |
 | Video / spikes | frame rate, detection and rejection thresholds, voltage scale, frame size, slow motion, quality, pane width, artifact scan threshold, maximum clusters |
+| Colours | colour scheme for the rendered video |
 | Output | output folder, file name pattern, which outputs to write, ffmpeg location |
+
+The **Colours** tab sets how the video is drawn. Pick one of three schemes,
+**Dark**, **Light** or **Colour-blind safe**, then click any swatch to replace
+a single colour. Ten elements can be set: background, text and ticks, grid,
+signal envelope, playhead, threshold lines, rejected marks, and the three
+cluster colours. **Reset to scheme** puts the chosen scheme back. The cluster
+colours also tint the statistics table so it matches the video.
+
+Light is for figures and print. Colour-blind safe uses Okabe-Ito cluster
+colours, which stay distinguishable under the common forms of colour
+blindness; the default cyan, amber and purple do not.
+
+![The Colours tab](docs/gui_colours.png)
 
 Leave **Start time** empty to have each channel scanned for a clean window.
 The **Cluster statistics** table on the right fills in as each channel is

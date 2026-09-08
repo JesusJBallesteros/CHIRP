@@ -74,6 +74,45 @@ THRESH = "#8b949e"
 CLUSTER_COLORS = ["#4dd0e1", "#ffb74d", "#b39ddb"]   # largest amplitude first
 REJECT_COLOR = "#6e7681"
 
+# Colour schemes for the rendered video. Each is a flat name to colour map, so
+# the GUI can offer a preset and still let any single entry be replaced.
+THEME_KEYS = ["bg", "fg", "grid", "envelope", "playhead", "threshold",
+              "reject", "cluster1", "cluster2", "cluster3"]
+THEME_LABELS = {
+    "bg": "Background", "fg": "Text and ticks", "grid": "Grid",
+    "envelope": "Signal envelope", "playhead": "Playhead",
+    "threshold": "Threshold lines", "reject": "Rejected marks",
+    "cluster1": "Cluster 1", "cluster2": "Cluster 2", "cluster3": "Cluster 3",
+}
+THEMES = {
+    "Dark": dict(bg=BG, fg=FG, grid=GRID, envelope=ENVELOPE, playhead=PLAYHEAD,
+                 threshold=THRESH, reject=REJECT_COLOR,
+                 cluster1=CLUSTER_COLORS[0], cluster2=CLUSTER_COLORS[1],
+                 cluster3=CLUSTER_COLORS[2]),
+    "Light": dict(bg="#ffffff", fg="#24292f", grid="#d8dee4",
+                  envelope="#8aa9b4", playhead="#d1451b", threshold="#6e7781",
+                  reject="#afb8c1", cluster1="#0969da", cluster2="#bc4c00",
+                  cluster3="#8250df"),
+    # Okabe-Ito cluster colours, distinguishable under the common forms of
+    # colour blindness, which the cyan/amber/purple set is not.
+    "Colour-blind safe": dict(bg="#0d1117", fg="#e6edf3", grid="#262c36",
+                              envelope="#4a6d7c", playhead="#d55e00",
+                              threshold="#9aa4b2", reject="#6e7681",
+                              cluster1="#56b4e9", cluster2="#e69f00",
+                              cluster3="#009e73"),
+}
+DEFAULT_THEME = "Dark"
+
+
+def resolve_theme(theme=None):
+    """Fill any missing entry from the default scheme."""
+    t = dict(THEMES[DEFAULT_THEME])
+    if isinstance(theme, str):
+        t.update(THEMES.get(theme, {}))
+    elif theme:
+        t.update({k: v for k, v in theme.items() if k in THEME_KEYS and v})
+    return t
+
 # Launching ffmpeg from a windowed (no-console) build would flash a black
 # console window for every render; this suppresses it on Windows.
 _POPEN_KW = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
@@ -557,34 +596,39 @@ def find_clean_window(*args, **kwargs):
 # ------------------------------------------------------------- figure build --
 def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
                  waves, idx, labels, centres, sigma, neg_k, pos_k,
-                 pre_ms, post_ms, slow, n_rejected, wave_frac):
+                 pre_ms, post_ms, slow, n_rejected, wave_frac, theme=None):
     w, h = size
-    fig = Figure(figsize=(w / dpi, h / dpi), dpi=dpi, facecolor=BG)
+    t = resolve_theme(theme)
+    bg, fg, grid_c = t["bg"], t["fg"], t["grid"]
+    envelope, playhead_c = t["envelope"], t["playhead"]
+    thresh, reject_c = t["threshold"], t["reject"]
+    clusters = [t["cluster1"], t["cluster2"], t["cluster3"]]
+    fig = Figure(figsize=(w / dpi, h / dpi), dpi=dpi, facecolor=bg)
     FigureCanvasAgg(fig)                            # attaches fig.canvas
     gs = fig.add_gridspec(2, 1, height_ratios=[1, 2.1], hspace=0.30,
                           left=0.065, right=0.985, top=0.90, bottom=0.085)
     n_clusters = len(centres)
 
     # ---- pane 1: whole excerpt, fixed scale, artifacts clipped -------------
-    ax_all = fig.add_subplot(gs[0], facecolor=BG)
+    ax_all = fig.add_subplot(gs[0], facecolor=bg)
     lo, hi = minmax_envelope(sig_uv, int(w * 0.9))
     ax_all.fill_between(np.linspace(0, duration, len(lo)), lo, hi,
-                        color=ENVELOPE, linewidth=0)
+                        color=envelope, linewidth=0)
     ax_all.set_xlim(0, duration)
     ax_all.set_ylim(*ylim)
-    ax_all.axhline(-neg_k * sigma, color=THRESH, linewidth=0.7, alpha=0.55,
+    ax_all.axhline(-neg_k * sigma, color=thresh, linewidth=0.7, alpha=0.55,
                    linestyle=(0, (5, 4)))
     ax_all.set_xlabel(f"Time window: {duration:g} s "
                       f"(fixed ±{ylim[1]:.0f} µV)",
-                      color=FG, fontsize=9)
-    ax_all.set_ylabel("µV", color=FG, fontsize=9)
+                      color=fg, fontsize=9)
+    ax_all.set_ylabel("µV", color=fg, fontsize=9)
     marks = [ax_all.scatter([], [], s=22, marker="v",
-                            color=CLUSTER_COLORS[j], zorder=5,
+                            color=clusters[j], zorder=5,
                             linewidths=0)
              for j in range(n_clusters)]
-    rej_mark = ax_all.scatter([], [], s=16, marker="x", color=REJECT_COLOR,
+    rej_mark = ax_all.scatter([], [], s=16, marker="x", color=reject_c,
                               zorder=4, linewidths=0.9, alpha=0.8)
-    playhead = ax_all.axvline(0, color=PLAYHEAD, linewidth=1.2)
+    playhead = ax_all.axvline(0, color=playhead_c, linewidth=1.2)
 
     # ---- pane 2..n: one narrow pane per cluster ----------------------------
     # Each pane is deliberately much narrower than half the figure: squeezing
@@ -610,29 +654,29 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
              if n_clusters > 1 else ["Spike events"])
     for j in range(n_clusters):
         ax = fig.add_axes([left0 + j * (wave_frac + gap), bottom,
-                           wave_frac, height], facecolor=BG)
+                           wave_frac, height], facecolor=bg)
         ax.set_xlim(t_ms[0], t_ms[-1])
-        ax.axvline(0, color=THRESH, linewidth=0.7, alpha=0.35)
+        ax.axvline(0, color=thresh, linewidth=0.7, alpha=0.35)
         for lvl in (-neg_k * sigma, pos_k * sigma):
-            ax.axhline(lvl, color=THRESH, linewidth=0.7, alpha=0.5,
+            ax.axhline(lvl, color=thresh, linewidth=0.7, alpha=0.5,
                        linestyle=(0, (5, 4)))
         if j == n_clusters - 1:                     # label thresholds once
             for lvl, lab in ((-neg_k * sigma, f"−{neg_k:g}σ"),
                              (pos_k * sigma, f"+{pos_k:g}σ")):
-                ax.text(t_ms[-1] * 0.97, lvl, lab, color=THRESH, fontsize=8,
+                ax.text(t_ms[-1] * 0.97, lvl, lab, color=thresh, fontsize=8,
                         ha="right", va="bottom" if lvl > 0 else "top",
                         alpha=0.85)
         ax.set_xticks([-1, 0, 1, 2])
-        ax.set_xlabel("ms (from trough)", color=FG, fontsize=9)
+        ax.set_xlabel("ms (from trough)", color=fg, fontsize=9)
         if j == 0:
-            ax.set_ylabel("µV", color=FG, fontsize=10)
+            ax.set_ylabel("µV", color=fg, fontsize=10)
         else:
             ax.tick_params(labelleft=False)         # shared scale, one axis
-        (ln,) = ax.plot([], [], color=CLUSTER_COLORS[j], linewidth=0.7,
+        (ln,) = ax.plot([], [], color=clusters[j], linewidth=0.7,
                         alpha=0.30)
-        (mn,) = ax.plot([], [], color=CLUSTER_COLORS[j], linewidth=2.4,
+        (mn,) = ax.plot([], [], color=clusters[j], linewidth=2.4,
                         alpha=0.95, zorder=6)
-        ttl = ax.set_title("", color=CLUSTER_COLORS[j], fontsize=10.5,
+        ttl = ax.set_title("", color=clusters[j], fontsize=10.5,
                            pad=8, family="monospace")
         axes_w.append(ax)
         traces.append(ln)
@@ -642,19 +686,19 @@ def build_figure(sig_uv, fs, duration, band, chan_name, size, dpi, ylim,
         ttl.set_text(names_j)
 
     for a in [ax_all] + axes_w:
-        a.grid(True, color=GRID, linewidth=0.6)
-        a.tick_params(colors=FG, labelsize=8)
+        a.grid(True, color=grid_c, linewidth=0.6)
+        a.tick_params(colors=fg, labelsize=8)
         for spine in a.spines.values():
-            spine.set_color(GRID)
+            spine.set_color(grid_c)
 
     head = (f"{chan_name}   {band[0]:.0f}-{band[1]:.0f} Hz   "
             f"σ={sigma:.1f} µV   detect −{neg_k:g}σ = {-neg_k * sigma:.0f} µV"
             + (f"   {slow:g}× slow motion" if slow != 1 else "   real time"))
-    fig.text(0.065, 0.955, head, color=FG, fontsize=11, ha="left",
+    fig.text(0.065, 0.955, head, color=fg, fontsize=11, ha="left",
              va="center", alpha=0.9)
-    clock = fig.text(0.985, 0.955, "", color=FG, fontsize=11, ha="right",
+    clock = fig.text(0.985, 0.955, "", color=fg, fontsize=11, ha="right",
                      va="center", family="monospace")
-    rej_text = fig.text(0.985, bottom + height + 0.055, "", color=REJECT_COLOR,
+    rej_text = fig.text(0.985, bottom + height + 0.055, "", color=reject_c,
                         fontsize=9.5, ha="right", va="center",
                         family="monospace")
 
@@ -671,7 +715,7 @@ def render(path: Path, out_dir: Path, duration: float, start,
            neg_k: float, pos_k: float, pre_ms: float, post_ms: float,
            refractory_ms: float, wave_frac: float, keep_wav: bool,
            out_stem: str | None = None, cancel=None, progress=None,
-           max_k: int = 3) -> Path:
+           max_k: int = 3, theme=None) -> Path:
     if shutil.which("ffmpeg") is None:
         raise RuntimeError("ffmpeg not found on PATH")
 
@@ -724,7 +768,7 @@ def render(path: Path, out_dir: Path, duration: float, start,
     fig, art = build_figure(sig, fs, duration, band, path.stem, (w, h), dpi,
                             ylim, waves, idx, labels, centres, sigma,
                             neg_k, pos_k, pre_ms, post_ms, slow, n_rej,
-                            wave_frac)
+                            wave_frac, theme=theme)
     fig.canvas.draw()
     fh, fw = np.asarray(fig.canvas.buffer_rgba()).shape[:2]
     w, h = fw // 2 * 2, fh // 2 * 2

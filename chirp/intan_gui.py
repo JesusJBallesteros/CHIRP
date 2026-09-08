@@ -21,7 +21,7 @@ import traceback
 from pathlib import Path
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 # When frozen by PyInstaller the engine modules sit alongside this file inside
 # the bundle; when run from source they sit next to it on disk. Both work
@@ -160,6 +160,7 @@ class App(ttk.Frame):
         self._tab_common(nb)
         self._tab_audio(nb)
         self._tab_video(nb)
+        self._tab_colours(nb)
         self._tab_output(nb)
 
         # ---- statistics table, right hand side -------------------------
@@ -197,8 +198,9 @@ class App(ttk.Frame):
         hsb.grid(row=1, column=0, sticky="ew")
         self.tree.config(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         # Rows are tinted by cluster index, matching the video's pane colours.
-        for j, colour in enumerate(eng_video.CLUSTER_COLORS):
-            self.tree.tag_configure(f"c{j}", foreground=colour)
+        for j in range(3):
+            self.tree.tag_configure(f"c{j}",
+                                    foreground=self.theme[f"cluster{j + 1}"])
 
         row = ttk.Frame(tf)
         row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6, 0))
@@ -312,6 +314,67 @@ class App(ttk.Frame):
             .grid(row=9, column=1, sticky="w", **PAD)
         ttk.Label(t, text="k-means tries 1 up to this many",
                   foreground="#666").grid(row=9, column=2, sticky="w", **PAD)
+
+    def _tab_colours(self, nb):
+        """Preset schemes for the video, and one swatch per element."""
+        t = ttk.Frame(nb, padding=8)
+        nb.add(t, text="Colours")
+        self.theme = dict(eng_video.THEMES[eng_video.DEFAULT_THEME])
+        self.v_preset = tk.StringVar(value=eng_video.DEFAULT_THEME)
+
+        ttk.Label(t, text="Scheme").grid(row=0, column=0, sticky="w", **PAD)
+        box = ttk.Frame(t)
+        box.grid(row=0, column=1, columnspan=3, sticky="w")
+        for name in eng_video.THEMES:
+            ttk.Radiobutton(box, text=name, value=name,
+                            variable=self.v_preset,
+                            command=self._apply_preset).pack(side="left",
+                                                             padx=(0, 12))
+        ttk.Separator(t, orient="horizontal").grid(row=1, column=0,
+                                                   columnspan=4, sticky="ew",
+                                                   pady=8)
+        ttk.Label(t, text="Click a swatch to change that colour",
+                  foreground="#666").grid(row=2, column=0, columnspan=4,
+                                          sticky="w", **PAD)
+
+        # Two columns of swatches so the tab stays the height of the others.
+        self.swatches = {}
+        half = (len(eng_video.THEME_KEYS) + 1) // 2
+        for i, key in enumerate(eng_video.THEME_KEYS):
+            col, row = (0 if i < half else 2), 3 + (i % half)
+            ttk.Label(t, text=eng_video.THEME_LABELS[key]) \
+                .grid(row=row, column=col, sticky="w", **PAD)
+            btn = tk.Button(t, width=6, relief="ridge", borderwidth=1,
+                            command=lambda k=key: self._pick_colour(k))
+            btn.grid(row=row, column=col + 1, sticky="w", **PAD)
+            self.swatches[key] = btn
+        ttk.Button(t, text="Reset to scheme", command=self._apply_preset) \
+            .grid(row=3 + half, column=1, sticky="w", pady=(10, 0))
+        self._refresh_swatches()
+
+    def _apply_preset(self):
+        self.theme = dict(eng_video.THEMES[self.v_preset.get()])
+        self._refresh_swatches()
+
+    def _pick_colour(self, key):
+        rgb, hexval = colorchooser.askcolor(
+            color=self.theme.get(key),
+            title=f"{eng_video.THEME_LABELS[key]} colour")
+        if hexval:
+            self.theme[key] = hexval
+            self._refresh_swatches()
+
+    def _refresh_swatches(self):
+        for key, btn in self.swatches.items():
+            c = self.theme[key]
+            btn.config(background=c, activebackground=c)
+        # Keep the statistics table tinted like the video's cluster panes.
+        # The colours tab is built before the table, so this is a no-op the
+        # first time round and _build_table picks the colours up itself.
+        if hasattr(self, "tree"):
+            for j in range(3):
+                self.tree.tag_configure(
+                    f"c{j}", foreground=self.theme[f"cluster{j + 1}"])
 
     def _tab_output(self, nb):
         t = ttk.Frame(nb, padding=8)
@@ -474,6 +537,7 @@ class App(ttk.Frame):
             name=self.v_name.get().strip() or "{stem}_{start}s+{dur}s_{lo}-{hi}Hz",
             wav=self.v_wav.get(), mp4=self.v_mp4.get(),
             stats=self.v_stats.get(),
+            theme=dict(self.theme),
             ffmpeg=self.v_ffmpeg.get().strip(),
         )
         if cfg["dur"] <= 0:
@@ -623,7 +687,7 @@ class App(ttk.Frame):
                         cancel=self.cancel_flag.is_set,
                         progress=lambda f, d=done: self.q.put(
                             ("prog", (d + f) / n_jobs)),
-                        max_k=cfg["maxk"])
+                        max_k=cfg["maxk"], theme=cfg["theme"])
                     done += 1
                     self.q.put(("prog", done / n_jobs))
 
