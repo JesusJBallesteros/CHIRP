@@ -29,6 +29,8 @@ import numpy as np
 from scipy import signal
 from scipy.io import wavfile
 
+from _version import __version__
+
 # ---------------------------------------------------------------- constants --
 # Where the tool looks for amp-*.dat. The working directory, not the script
 # directory: the scripts live in the repo, the recordings live elsewhere.

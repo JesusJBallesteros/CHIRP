@@ -31,18 +31,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dat_to_audio as eng_audio
 import dat_to_video as eng_video
+import dat_to_stats as eng_stats
 
 APP_TITLE = "CHIRP GUI"
 PAD = dict(padx=6, pady=3)
 
-# Statistics are averaged over this many of the best-scoring windows per
-# channel, rather than the single one that gets rendered - one excerpt is a
-# thin basis for a firing rate. Rendering still uses only the best of them.
-STAT_SEGMENTS = 3
+# Both of these describe the engine's own behaviour, so they are defined with
+# it and only borrowed here. A statistics run measures STAT_SEGMENTS of the
+# best-scoring windows per channel rather than the single one that gets
+# rendered; one excerpt is a thin basis for a firing rate.
+STAT_SEGMENTS = eng_stats.STAT_SEGMENTS
+AUTO_LABEL = eng_video.AUTO_LABEL
 
-# Shown in the auto column. The screen is a first pass for a human to correct,
-# so the labels are worded as impressions rather than conclusions.
-AUTO_LABEL = {1: "1 isolated", 2: "2 multi-unit", 3: "3 noise", 0: "-"}
+# Purely presentational, so this one stays: the auto column's row tints.
 AUTO_COLOR = {1: "#4caf50", 2: "#ffb74d", 3: "#8b949e", 0: "#6e7681"}
 
 
@@ -584,98 +585,37 @@ class App(ttk.Frame):
             # dat_to_video resolves ffmpeg via PATH; prepend ours for this run.
             os.environ["PATH"] = (str(Path(cfg["ffmpeg"]).parent) + os.pathsep
                                   + os.environ.get("PATH", ""))
-        per_file = int(cfg["wav"]) + int(cfg["mp4"]) + int(cfg["stats"])
-        n_jobs = max(1, len(cfg["files"]) * per_file)
-        done = 0
-        all_rows = []
+        # Progress is measured in "units": one per channel for the statistics
+        # survey, one per media file. The survey reports a fraction of itself
+        # as it goes, the media jobs land whole, and the bar is the sum.
+        media_per_file = int(cfg["wav"]) + int(cfg["mp4"])
+        stats_units = len(cfg["files"]) if cfg["stats"] else 0
+        media_units = len(cfg["files"]) * media_per_file
+        total_units = max(1, stats_units + media_units)
+        counters = dict(stats=0.0, media=0)
+
+        def bump():
+            self.q.put(("prog", (stats_units * counters["stats"]
+                                 + counters["media"]) / total_units))
+
         band = (cfg["lo"], cfg["hi"])
         try:
             cfg["out"].mkdir(parents=True, exist_ok=True)
 
-            # Cross-channel pass, once, before anything else. Sharing is a
-            # property of a channel within its session, so it needs one window
-            # common to every selected channel rather than each channel's own
-            # best one. Meaningless with a single channel selected.
-            shares, n_ch = {}, 0
-            if cfg["stats"] and len(cfg["files"]) >= 2:
-                shortest = min(eng_audio.file_duration_s(p, cfg["fs"])
-                               for p in cfg["files"])
-                share_start = (cfg["start"] if cfg["start"] is not None
-                               else max(0.0, (shortest - cfg["dur"]) / 2))
-                self.q.put(("status", "cross-channel scan"))
-                print(f"cross-channel scan: {len(cfg['files'])} channels, "
-                      f"{cfg['dur']:.0f} s at {share_start:.0f} s")
-                shares, n_ch = eng_video.session_sharing(
-                    cfg["files"], share_start, cfg["dur"], band, cfg["fs"],
-                    cfg["negk"], cfg["posk"],
-                    cancel=self.cancel_flag.is_set,
-                    progress=lambda f: self.q.put(("prog", 0.05 * f)))
-                busy = [s for s in shares.values()
-                        if s > max(eng_video.SHARE_MIN_CHANNELS,
-                                   eng_video.SHARE_FRAC * n_ch)]
-                print(f"  {len(busy)}/{n_ch} channel(s) carry a signal shared "
-                      f"across a large batch")
-            elif cfg["stats"]:
-                print("cross-channel scan skipped: needs 2+ channels selected")
-
-            for path in cfg["files"]:
-                if self.cancel_flag.is_set():
-                    raise eng_video.Cancelled("cancelled")
-                self.q.put(("status", path.name))
-
-                # Statistics run over the best STAT_SEGMENTS windows, so they
-                # describe the channel rather than one arbitrary excerpt.
-                # Rendering still uses only the single best of them.
-                segments = [cfg["start"]] if cfg["start"] is not None else []
-                if not segments and (cfg["mp4"] or cfg["stats"]):
-                    want = STAT_SEGMENTS if cfg["stats"] else 1
-                    segments = eng_video.find_best_windows(
-                        path, cfg["dur"], band, cfg["fs"],
-                        60.0, cfg["artifactk"], cfg["negk"], cfg["posk"],
-                        1.0, 2.0, 1.0, None, True, True,
-                        cancel=self.cancel_flag.is_set,
-                        progress=lambda f, d=done: self.q.put(
-                            ("prog", (d + f) / n_jobs)),
-                        max_k=cfg["maxk"], top_n=want)
-                if not segments:
-                    segments = [(eng_audio.file_duration_s(path, cfg["fs"])
-                                 - cfg["dur"]) / 2]
-                # Everything rendered or exported describes segments[0].
-                eff_start = segments[0]
+            def media(path, eff_start):
+                """The exports for one channel, from its best window."""
+                if not media_per_file:
+                    return
                 name = self._format_name(cfg, path, eff_start)
-
-                if cfg["stats"]:
-                    for rank, seg_start in enumerate(segments, start=1):
-                        if self.cancel_flag.is_set():
-                            raise eng_video.Cancelled("cancelled")
-                        rows, _ = eng_video.channel_stats(
-                            path, seg_start, cfg["dur"], band, cfg["fs"],
-                            cfg["negk"], cfg["posk"], max_k=cfg["maxk"],
-                            segment=rank,
-                            share_count=shares.get(path.stem), n_channels=n_ch)
-                        all_rows += rows
-                        self.q.put(("stats", rows))
-                        print(f"{path.name} segment {rank} "
-                              f"({seg_start:.0f} s): {len(rows)} cluster(s) - "
-                              + "; ".join(
-                                  f"#{r['cluster']} "
-                                  f"{r['mean_amplitude_uV']:.0f} uV, "
-                                  f"{r['firing_rate_sp_s']:.1f} sp/s, "
-                                  f"SNR {r['snr']:.1f}, "
-                                  f"auto {AUTO_LABEL.get(r['auto_quality'], '?')}"
-                                  for r in rows))
-                    done += 1
-                    self.q.put(("prog", done / n_jobs))
-
                 if cfg["wav"]:
                     eng_audio.convert(
                         path, cfg["out"], cfg["dur"], eff_start, band,
                         cfg["fs"], cfg["resample"], cfg["bits"],
                         cfg["headroom"], True, out_name=name + ".wav")
-                    done += 1
-                    self.q.put(("prog", done / n_jobs))
-
+                    counters["media"] += 1
+                    bump()
                 if cfg["mp4"]:
+                    base = counters["media"]
                     eng_video.render(
                         path, cfg["out"], cfg["dur"], eff_start, band,
                         cfg["fs"], cfg["fps"],
@@ -685,19 +625,62 @@ class App(ttk.Frame):
                         cfg["wavefrac"], False,
                         out_stem=name,
                         cancel=self.cancel_flag.is_set,
-                        progress=lambda f, d=done: self.q.put(
-                            ("prog", (d + f) / n_jobs)),
+                        progress=lambda f, b=base: self.q.put(
+                            ("prog", (stats_units * counters["stats"] + b + f)
+                                     / total_units)),
                         max_k=cfg["maxk"], theme=cfg["theme"])
-                    done += 1
-                    self.q.put(("prog", done / n_jobs))
+                    counters["media"] += 1
+                    bump()
 
-            if cfg["stats"] and all_rows:
+            result = None
+            if cfg["stats"]:
+                # One survey drives the whole run: it does the cross-channel
+                # pass, picks each channel's windows and measures them. The
+                # windows come back through on_channel, so anything exported
+                # reuses them instead of scanning the recording twice.
+                def on_stats_progress(f):
+                    counters["stats"] = f
+                    bump()
+
+                result = eng_stats.run_stats(
+                    cfg["files"],
+                    eng_stats.StatsParams(
+                        duration=cfg["dur"], start=cfg["start"], band=band,
+                        fs=cfg["fs"], neg_k=cfg["negk"], pos_k=cfg["posk"],
+                        artifact_k=cfg["artifactk"], max_k=cfg["maxk"],
+                        segments=STAT_SEGMENTS),
+                    cancel=self.cancel_flag.is_set,
+                    progress=on_stats_progress,
+                    status=lambda t: self.q.put(("status", t)),
+                    on_rows=lambda rows: self.q.put(("stats", rows)),
+                    on_channel=lambda path, segs, rows: media(path, segs[0]))
+            elif media_per_file:
+                # No survey, so each channel still needs its one best window.
+                for path in cfg["files"]:
+                    if self.cancel_flag.is_set():
+                        raise eng_video.Cancelled("cancelled")
+                    self.q.put(("status", path.name))
+                    if cfg["start"] is not None:
+                        eff_start = cfg["start"]
+                    else:
+                        found = eng_video.find_best_windows(
+                            path, cfg["dur"], band, cfg["fs"],
+                            60.0, cfg["artifactk"], cfg["negk"], cfg["posk"],
+                            1.0, 2.0, 1.0, None, True, True,
+                            cancel=self.cancel_flag.is_set,
+                            max_k=cfg["maxk"], top_n=1)
+                        eff_start = found[0] if found else (
+                            eng_audio.file_duration_s(path, cfg["fs"])
+                            - cfg["dur"]) / 2
+                    media(path, eff_start)
+
+            if result is not None and result.rows:
                 s_csv = eng_video.write_stats_csv(
-                    all_rows, cfg["out"] / "chirp_cluster_stats.csv")
-                print(f"  -> {s_csv.name} ({len(all_rows)} rows)")
-                self.q.put(("report", self._build_report(all_rows, cfg,
-                                                         [s_csv])))
-            self.q.put(("done", f"Finished. {done} job(s), output in "
+                    result.rows, cfg["out"] / eng_stats.DEFAULT_CSV_NAME)
+                print(f"  -> {s_csv.name} ({len(result.rows)} rows)")
+                self.q.put(("report", eng_stats.build_report(result, [s_csv])))
+            n_done = int(stats_units + counters["media"])
+            self.q.put(("done", f"Finished. {n_done} job(s), output in "
                                 f"{cfg['out']}"))
         except eng_video.Cancelled:
             self.q.put(("done", "Cancelled."))
@@ -708,97 +691,7 @@ class App(ttk.Frame):
             writer.flush()
             sys.stdout, sys.stderr = old_out, old_err
 
-    # -------------------------------------------------------------- report --
-    @staticmethod
-    def _build_report(rows, cfg, files):
-        """Plain-text summary of the whole run, shown at the end and logged."""
-        import statistics as st
-        from collections import Counter
-
-        # Cluster count is a property of one excerpt, so tally it per
-        # channel x segment rather than collapsing it onto the channel.
-        per_seg = {}
-        for r in rows:
-            per_seg[(r["channel"], r["segment"])] = r["n_clusters"]
-        kdist = Counter(per_seg.values())
-        channels = {r["channel"] for r in rows}
-
-        def pm(key, fmt):
-            vals = [r[key] for r in rows]
-            m = st.fmean(vals)
-            sd = st.pstdev(vals) if len(vals) > 1 else 0.0
-            return f"{fmt.format(m)} +/- {fmt.format(sd)}"
-
-        L = []
-        L.append("CHIRP - cluster statistics report")
-        L.append("=" * 60)
-        L.append(f"channels analysed   : {len(channels)}")
-        L.append(f"segments analysed   : {len(per_seg)} "
-                 f"({len(per_seg) / max(1, len(channels)):.1f} per channel)")
-        L.append(f"excerpt             : {cfg['dur']:.0f} s" + (
-            f" from {cfg['start']:.0f} s" if cfg["start"] is not None
-            else f", best {STAT_SEGMENTS} non-overlapping windows per channel"
-                 f" (the first was rendered)"))
-        L.append(f"band-pass           : {cfg['lo']:.0f}-{cfg['hi']:.0f} Hz")
-        L.append(f"detect / reject     : -{cfg['negk']:g} sigma / "
-                 f"+{cfg['posk']:g} sigma")
-        L.append(f"artifact scan       : {cfg['artifactk']:g} sigma")
-        L.append(f"max clusters        : {cfg['maxk']}")
-        L.append("")
-        L.append("clusters per segment : " + ", ".join(
-            f"{k} cluster(s) x {v} segment(s)" for k, v in sorted(kdist.items())))
-        L.append(f"cluster rows in total: {len(rows)}")
-        L.append(f"spikes in total      : {sum(r['n_spikes'] for r in rows)}")
-        L.append("")
-        L.append("across all cluster rows (mean +/- sd):")
-        L.append(f"  mean amplitude     : {pm('mean_amplitude_uV', '{:.1f}')} uV")
-        L.append(f"  firing rate        : {pm('firing_rate_sp_s', '{:.1f}')} sp/s")
-        L.append(f"  SNR                : {pm('snr', '{:.1f}')}")
-        L.append(f"  half-width         : {pm('half_width_ms', '{:.3f}')} ms")
-        L.append(f"  trough-to-peak     : {pm('trough_to_peak_ms', '{:.2f}')} ms")
-        L.append(f"  noise sigma        : {pm('sigma_uV', '{:.2f}')} uV")
-        L.append("")
-        tagged = [r for r in rows if r.get("auto_quality")]
-        if tagged:
-            ac = Counter(r["auto_quality"] for r in tagged)
-            L.append("first-pass tag, per cluster:")
-            for v in (1, 2, 3):
-                if ac.get(v):
-                    L.append(f"  {AUTO_LABEL[v]:<14s} {ac[v]:4d} / {len(tagged)}")
-            if len(tagged) < len(rows):
-                L.append(f"  {'not assessed':<14s} {len(rows) - len(tagged):4d}"
-                         f" / {len(rows)}  (too few spikes to judge)")
-            # A channel is worth opening if any of its clusters looks isolated.
-            best = {}
-            for r in tagged:
-                b = best.get(r["channel"], 9)
-                best[r["channel"]] = min(b, r["auto_quality"])
-            bc = Counter(best.values())
-            L.append("")
-            L.append("first-pass tag, per channel (best cluster on it):")
-            for v in (1, 2, 3):
-                if bc.get(v):
-                    L.append(f"  {AUTO_LABEL[v]:<14s} {bc[v]:4d} / {len(best)}")
-            worth = sorted(c for c, v in best.items() if v == 1)
-            if worth:
-                L.append("")
-                L.append("channels with a cluster that looks isolated:")
-                for i in range(0, len(worth), 6):
-                    L.append("  " + ", ".join(worth[i:i + 6]))
-            L.append("")
-            L.append("This tag is a first pass meant to be reviewed, not a")
-            L.append("verdict. Against one hand-tagged session it agreed on")
-            L.append("95% of channels and 91% of clusters.")
-        L.append("")
-        L.append("written:")
-        for f in files:
-            L.append(f"  {f}")
-        L.append("")
-        L.append("note: half-width and trough-to-peak shift with the")
-        L.append("      band-pass, so compare them only between recordings")
-        L.append("      filtered the same way.")
-        return "\n".join(L)
-
+    # ------------------------------------------------------------- report --
     def _reopen_report(self):
         if getattr(self, "_last_report", None):
             self._show_report(self._last_report)

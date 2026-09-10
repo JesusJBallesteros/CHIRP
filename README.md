@@ -139,6 +139,9 @@ Scripts look for `amp-*.dat` in the **current directory** unless you pass
 `--folder`.
 
 ```bash
+# survey every channel and write the table and the report, rendering nothing
+python chirp/dat_to_stats.py --folder /path/to/recording --all
+
 # 20 s from the middle of one channel, band-passed, as a WAV
 python chirp/dat_to_audio.py --folder /path/to/recording amp-A-010.dat
 
@@ -153,7 +156,18 @@ python chirp/dat_to_video.py --folder /path/to/recording amp-A-010.dat --duratio
 python chirp/dat_to_video.py amp-A-010.dat --pos-k 12 --slow 4
 ```
 
-`--help` on either script lists every option.
+`--help` on any of the scripts lists every option.
+
+`dat_to_stats.py` is the batch form of the survey the GUI runs. It needs no
+display and no ffmpeg, so it can be scripted over a night's sessions or run on
+a recording machine over SSH. It is also importable, which is how external
+wrappers drive it:
+
+```python
+import dat_to_stats as eng_stats
+result = eng_stats.run_stats(paths, eng_stats.StatsParams(fs=30000))
+print(eng_stats.build_report(result, []))
+```
 
 #### Some options
 
@@ -178,9 +192,11 @@ python chirp/dat_to_video.py amp-A-010.dat --pos-k 12 --slow 4
 
 ## Cluster statistics
 
-With **Cluster statistics** ticked, each selected channel is analysed over its
-three best non-overlapping windows and one row is written per channel, segment
-and cluster to `chirp_cluster_stats.csv` in the output folder.
+With **Cluster statistics** ticked, or from `dat_to_stats.py`, each selected
+channel is analysed over its three best non-overlapping windows and one row is
+written per channel, segment and cluster to `chirp_cluster_stats.csv` in the
+output folder. Both routes run the same code and produce the same table; the
+script also drops the report beside it as `chirp_report.txt`.
 
 | Column | Meaning |
 |---|---|
@@ -252,7 +268,12 @@ recording. What CHIRP gives you cheaply is a description of the material the
 sorter will be handed, in the units the sorter's own settings are expressed in.
 
 Run it across every channel with statistics on, read the report, then set up
-the sort.
+the sort:
+
+```bash
+cd /path/to/recording
+python /path/to/CHIRP/chirp/dat_to_stats.py --all
+```
 
 ### Measurements that transfer directly
 
@@ -352,8 +373,10 @@ Notes on the executable:
 CHIRP/
 ├── chirp/
 │   ├── dat_to_audio.py    reading, filtering, WAV export  (importable engine)
-│   ├── dat_to_video.py    detection, clustering, statistics, MP4 rendering
+│   ├── dat_to_video.py    detection, clustering, per-cluster measurements, MP4
+│   ├── dat_to_stats.py    the survey: whole-session run, CSV and report
 │   ├── intan_gui.py       tkinter front end
+│   ├── _version.py        the version string
 │   └── build_exe.py       PyInstaller packaging
 ├── demo/                  demo video
 ├── docs/                  screenshots used by this README
@@ -361,7 +384,11 @@ CHIRP/
 ```
 
 `dat_to_video.py` imports its DSP from `dat_to_audio.py`, so the filtering and
-scaling are defined once and both paths stay consistent.
+scaling are defined once and both paths stay consistent. `dat_to_stats.py`
+imports the detection and measurement from `dat_to_video.py` and owns only the
+run: one cross-channel pass, then each channel's best windows. The GUI drives
+that same function rather than a copy of it, so the table it fills and the one
+the script writes cannot drift apart.
 
 ## Data format
 

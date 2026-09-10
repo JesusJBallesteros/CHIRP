@@ -60,7 +60,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from dat_to_audio import (
     FOLDER, SAMPLE_RATE, DEFAULT_BAND, FILTER_ORDER, EDGE_PAD_S,
-    file_duration_s, read_segment, bandpass, normalize, to_pcm,
+    file_duration_s, read_segment, bandpass, normalize, to_pcm, __version__,
 )
 from scipy.io import wavfile
 
@@ -334,6 +334,11 @@ SHARE_MIN_CHANNELS = 8     # floor, so small probes never trip the test
 RESID_ISOLATED = 0.15      # waveform residual at or below this reads as one unit
 RATE_MULTIUNIT = 10.0      # sp/s above which unseparated activity reads as hash
 MIN_SPIKES_FOR_RESIDUAL = 3
+
+# How the tag is worded wherever it is shown. It belongs beside auto_quality()
+# rather than in a front end: the screen is a first pass for a human to
+# correct, so the labels read as impressions rather than conclusions.
+AUTO_LABEL = {1: "1 isolated", 2: "2 multi-unit", 3: "3 noise", 0: "-"}
 
 
 def waveform_residual(W):
